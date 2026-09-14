@@ -580,16 +580,14 @@ export class LifeBlobRenderer {
     const cellCssH = cssH / rows;
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
-    // Overlap enough that a shared edge is one body. Stay under 0.64 so a
-    // vacant cell between two live ones cannot fill (midpoint sd stays > 0).
-    const blobScale = 0.535 + g * 0.055;
+    // Default (g=0.22) already fills adjacent waists into one body. Stay
+    // under 0.64 scale / ~1.22 k so a vacant cell between two live ones
+    // cannot fill (midpoint sd stays > 0 even at 180).
+    const blobScale = 0.575 + g * 0.032;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
-    // Full stadium — no box corners, no hex facets.
     const cornerCss = Math.min(halfCssW, halfCssH);
-    // Polynomial smin pulls by k/4. At 180 this is ~0.31×cell, still short
-    // of the vacant-cell midpoint (~0.37×cell).
-    const gooeyCss = minCell * (0.55 + g * 0.38);
+    const gooeyCss = minCell * (0.86 + g * 0.2);
 
     return {
       cssW,
