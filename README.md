@@ -4,9 +4,9 @@ An artistic [Conway’s Game of Life](https://en.wikipedia.org/wiki/Conway%27s_G
 
 Roughly in the editorial language of Better Half / Cult Holdings: sparse type, no dashboard chrome, the field is the page.
 
-## Run (on your Mac)
+## Local clone, remote on GitHub
 
-This is a local app. Cloud desktop preview is too slow to play.
+The repo **lives on GitHub** (the remote). You **clone** it onto the Mac (a local working copy). You **look at it locally** with `npm run dev` + Dia. You **push** commits so the cloud copy stays current. Cloud agents then `pull`. That is the whole loop — not the VM desktop.
 
 ```bash
 git clone https://github.com/marcomargittai/mm-life.git
@@ -15,12 +15,10 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:43173** in Dia. Edits hot-reload.
-
-Use a **local** Cursor agent for anything you need to see. Use Cloud only for work you will not watch.
+Open **http://127.0.0.1:43173** in Dia. Use a **local** Cursor agent for anything you need to see. After a change you want saved: commit and push to `origin`.
 
 ```bash
-npm test    # engine + pattern invariants
+npm test
 npm run lint
 ```
 
