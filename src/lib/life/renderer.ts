@@ -115,7 +115,7 @@ float cellField(vec2 px, vec2 gc, float t, vec2 halfExt, float rad, float rr) {
 
   vec2 center = uOrigin + (gc + 0.5) * uCellSize;
   if (prev > 0.5 && next > 0.5) {
-    return sdRoundedBox(px - center, halfExt, rr);
+    return length(px - center) - rad;
   }
   return morphFromNeighbors(px, gc, center, next > 0.5, t, rad, halfExt, rr);
 }
@@ -538,7 +538,9 @@ export class LifeBlobRenderer {
 
         if (prev && next) {
           eachReplica(c, r, (cx, cy) => {
-            fillRoundedRect(ctx, cx - L.halfDevW, cy - L.halfDevH, L.halfDevW * 2, L.halfDevH * 2, L.cornerDev);
+            ctx.beginPath();
+            ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+            ctx.fill();
             for (const [dx, dy] of [...ORTHO, ...DIAG]) {
               if (dx < 0 || (dx === 0 && dy < 0)) continue;
               if (!live(previous, c + dx, r + dy) || !live(current, c + dx, r + dy)) continue;
