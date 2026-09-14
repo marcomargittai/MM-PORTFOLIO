@@ -120,6 +120,32 @@ float cellField(vec2 px, vec2 gc, float t, vec2 halfExt, float rad, float rr) {
   return morphFromNeighbors(px, gc, center, next > 0.5, t, rad, halfExt, rr);
 }
 
+bool settledLive(vec2 gc) {
+  vec2 occ = sampleOcc(gc);
+  return occ.x > 0.5 && occ.y > 0.5;
+}
+
+// A shared edge is a capsule, not two circles with a waist. smin on a
+// chain of cells is not associative and stays beaded; this does not.
+float neighborLinks(vec2 px, vec2 gc, float rad) {
+  if (!settledLive(gc)) return 1e5;
+  vec2 a = uOrigin + (gc + 0.5) * uCellSize;
+  float d = 1e5;
+  vec2 n0 = gc + vec2(1.0, 0.0);
+  vec2 n1 = gc + vec2(0.0, 1.0);
+  vec2 n2 = gc + vec2(1.0, 1.0);
+  vec2 n3 = gc + vec2(1.0, -1.0);
+  if ((uWrap >= 0.5 || inGrid(n0, uGridSize)) && settledLive(n0))
+    d = min(d, sdCapsule(px, a, uOrigin + (n0 + 0.5) * uCellSize, rad));
+  if ((uWrap >= 0.5 || inGrid(n1, uGridSize)) && settledLive(n1))
+    d = min(d, sdCapsule(px, a, uOrigin + (n1 + 0.5) * uCellSize, rad));
+  if ((uWrap >= 0.5 || inGrid(n2, uGridSize)) && settledLive(n2))
+    d = min(d, sdCapsule(px, a, uOrigin + (n2 + 0.5) * uCellSize, rad));
+  if ((uWrap >= 0.5 || inGrid(n3, uGridSize)) && settledLive(n3))
+    d = min(d, sdCapsule(px, a, uOrigin + (n3 + 0.5) * uCellSize, rad));
+  return d;
+}
+
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y);
   vec2 local = px - uOrigin;
@@ -145,10 +171,9 @@ void main() {
       vec2 gc = base + vec2(float(i), float(j));
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
       float d = cellField(px, gc, t, uHalfExtents, rad, uCornerRadius);
-      // Fillet anything already inside a cell-length window. Empty sentinels
-      // (1e5) stay a hard min so they cannot drag a hairline across a gap.
       if (d < lim && sd < lim) sd = smin(sd, d, k);
       else sd = min(sd, d);
+      sd = min(sd, neighborLinks(px, gc, rad));
     }
   }
 
@@ -512,6 +537,14 @@ export class LifeBlobRenderer {
         if (prev && next) {
           eachReplica(c, r, (cx, cy) => {
             fillRoundedRect(ctx, cx - L.halfDevW, cy - L.halfDevH, L.halfDevW * 2, L.halfDevH * 2, L.cornerDev);
+            for (const [dx, dy] of [...ORTHO, ...DIAG]) {
+              if (dx < 0 || (dx === 0 && dy < 0)) continue;
+              if (!live(previous, c + dx, r + dy) || !live(current, c + dx, r + dy)) continue;
+              ctx.beginPath();
+              ctx.moveTo(cx, cy);
+              ctx.lineTo(cx + dx * L.cellDevW, cy + dy * L.cellDevH);
+              ctx.stroke();
+            }
           });
           continue;
         }
