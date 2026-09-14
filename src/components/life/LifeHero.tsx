@@ -28,6 +28,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
+const RENDERER_REV = 5;
 
 function cellPx(): number {
   if (typeof window === "undefined") return 22;
@@ -187,7 +188,7 @@ export default function LifeHero() {
       loopRef.current = null;
       rendererRef.current = null;
     };
-  }, []);
+  }, [RENDERER_REV]);
 
   const hit = (clientX: number, clientY: number) => {
     const host = hostRef.current;
@@ -386,6 +387,7 @@ export default function LifeHero() {
       className={`${sans.className} relative h-dvh w-full overflow-hidden bg-black text-white`}
     >
       <canvas
+        key={RENDERER_REV}
         ref={canvasRef}
         className="pointer-events-none absolute inset-0 block h-full w-full outline-none"
         aria-hidden

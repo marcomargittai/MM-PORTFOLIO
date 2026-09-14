@@ -120,29 +120,30 @@ float cellField(vec2 px, vec2 gc, float t, vec2 halfExt, float rad, float rr) {
   return morphFromNeighbors(px, gc, center, next > 0.5, t, rad, halfExt, rr);
 }
 
-bool settledLive(vec2 gc) {
+bool isLive(vec2 gc) {
   vec2 occ = sampleOcc(gc);
-  return occ.x > 0.5 && occ.y > 0.5;
+  return occ.x > 0.5 || occ.y > 0.5;
 }
 
-// A shared edge is a capsule, not two circles with a waist. smin on a
-// chain of cells is not associative and stays beaded; this does not.
+vec2 cellCenter(vec2 gc) {
+  return uOrigin + (gc + 0.5) * uCellSize;
+}
+
+// Capsules from this cell to every live neighbor. Called once for the
+// cell under the pixel so a waist always sees the link that fills it.
 float neighborLinks(vec2 px, vec2 gc, float rad) {
-  if (!settledLive(gc)) return 1e5;
-  vec2 a = uOrigin + (gc + 0.5) * uCellSize;
+  if (!isLive(gc)) return 1e5;
+  vec2 a = cellCenter(gc);
   float d = 1e5;
-  vec2 n0 = gc + vec2(1.0, 0.0);
-  vec2 n1 = gc + vec2(0.0, 1.0);
-  vec2 n2 = gc + vec2(1.0, 1.0);
-  vec2 n3 = gc + vec2(1.0, -1.0);
-  if ((uWrap >= 0.5 || inGrid(n0, uGridSize)) && settledLive(n0))
-    d = min(d, sdCapsule(px, a, uOrigin + (n0 + 0.5) * uCellSize, rad));
-  if ((uWrap >= 0.5 || inGrid(n1, uGridSize)) && settledLive(n1))
-    d = min(d, sdCapsule(px, a, uOrigin + (n1 + 0.5) * uCellSize, rad));
-  if ((uWrap >= 0.5 || inGrid(n2, uGridSize)) && settledLive(n2))
-    d = min(d, sdCapsule(px, a, uOrigin + (n2 + 0.5) * uCellSize, rad));
-  if ((uWrap >= 0.5 || inGrid(n3, uGridSize)) && settledLive(n3))
-    d = min(d, sdCapsule(px, a, uOrigin + (n3 + 0.5) * uCellSize, rad));
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      if (i == 0 && j == 0) continue;
+      vec2 nb = gc + vec2(float(i), float(j));
+      if (uWrap < 0.5 && !inGrid(nb, uGridSize)) continue;
+      if (!isLive(nb)) continue;
+      d = min(d, sdCapsule(px, a, cellCenter(nb), rad));
+    }
+  }
   return d;
 }
 
@@ -173,9 +174,10 @@ void main() {
       float d = cellField(px, gc, t, uHalfExtents, rad, uCornerRadius);
       if (d < lim && sd < lim) sd = smin(sd, d, k);
       else sd = min(sd, d);
-      sd = min(sd, neighborLinks(px, gc, rad));
     }
   }
+
+  sd = min(sd, neighborLinks(px, base, rad));
 
   // Constant AA. fwidth(sd) on a windowed field spikes at cell borders
   // and draws CAD hairlines through empty space.
