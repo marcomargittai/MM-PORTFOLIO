@@ -63,33 +63,44 @@ vec2 sampleOcc(vec2 gc) {
   return texelFetch(uGrid, ivec2(tc), 0).rg;
 }
 
-// Grow or retract along every live neighbor so a new square is a nub
-// on the existing blob, never a satellite that pops from its own center.
+// Grow or retract along live neighbors so a new square is a nub on the
+// existing blob. Prefer neighbors that remain; only then transfer mass
+// from a neighbor that is dying in the same tick.
 float morphFromNeighbors(vec2 px, vec2 gc, vec2 center, bool birth, float t, float rad, vec2 halfExt, float rr) {
-  float dGrow = 1e5;
-  bool anyParent = false;
+  float dStay = 1e5;
+  float dFall = 1e5;
+  bool anyStay = false;
+  bool anyFall = false;
 
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
       if (i == 0 && j == 0) continue;
       vec2 parentGc = gc + vec2(float(i), float(j));
       vec2 nocc = sampleOcc(parentGc);
-      float parentLive = birth ? nocc.x : nocc.y;
-      if (parentLive < 0.5) continue;
-      anyParent = true;
+      bool stay = nocc.x > 0.5 && nocc.y > 0.5;
+      bool fallback = birth ? nocc.x > 0.5 : nocc.y > 0.5;
+      if (!stay && !fallback) continue;
       vec2 parentC = uOrigin + (parentGc + 0.5) * uCellSize;
       vec2 tip = birth ? mix(parentC, center, t) : mix(center, parentC, t);
-      dGrow = min(dGrow, sdCapsule(px, parentC, tip, rad));
+      float dCap = sdCapsule(px, parentC, tip, rad);
+      if (stay) {
+        anyStay = true;
+        dStay = min(dStay, dCap);
+      } else {
+        anyFall = true;
+        dFall = min(dFall, dCap);
+      }
     }
   }
 
+  float dGrow = anyStay ? dStay : dFall;
   float dBox = sdRoundedBox(px - center, halfExt, rr);
-  if (!anyParent) {
+  if (!anyStay && !anyFall) {
     float s = birth ? t : (1.0 - t);
     if (s < 0.02) return 1e5;
     return sdRoundedBox(px - center, halfExt * s, rr * s);
   }
-  if (birth) return mix(dGrow, dBox, smoothstep(0.62, 1.0, t));
+  if (birth) return mix(dGrow, dBox, smoothstep(0.55, 1.0, t));
   return mix(dBox, dGrow, smoothstep(0.0, 0.38, t));
 }
 
@@ -228,7 +239,8 @@ export class LifeBlobRenderer {
       this.gl = gl;
       try {
         this.initGl(gl);
-      } catch {
+      } catch (err) {
+        console.warn("Life WebGL2 init failed; using canvas2d.", err);
         this.teardownGl();
         this.init2d(canvas);
       }
@@ -491,7 +503,9 @@ export class LifeBlobRenderer {
         }
 
         const birth = !prev && next;
-        const parents = neighborsOf(c, r, (x, y) => live(birth ? previous : current, x, y));
+        const stayParents = neighborsOf(c, r, (x, y) => live(previous, x, y) && live(current, x, y));
+        const fallbackParents = neighborsOf(c, r, (x, y) => (birth ? live(previous, x, y) : live(current, x, y)));
+        const parents = stayParents.length ? stayParents : fallbackParents;
 
         if (parents.length === 0) {
           const s = birth ? t : 1 - t;
@@ -510,17 +524,22 @@ export class LifeBlobRenderer {
         }
 
         eachReplica(c, r, (cx, cy) => {
-          for (const [dx, dy] of parents) {
-            const px = cx + dx * L.cellDevW;
-            const py = cy + dy * L.cellDevH;
-            const tipX = birth ? mix(px, cx, t) : mix(cx, px, t);
-            const tipY = birth ? mix(py, cy, t) : mix(cy, py, t);
-            ctx.beginPath();
-            ctx.moveTo(px, py);
-            ctx.lineTo(tipX, tipY);
-            ctx.stroke();
+          const settle = birth ? smoothstep(0.55, 1, t) : 1 - smoothstep(0, 0.38, t);
+          const grow = 1 - settle;
+          if (grow > 0.02) {
+            ctx.globalAlpha = grow;
+            for (const [dx, dy] of parents) {
+              const px = cx + dx * L.cellDevW;
+              const py = cy + dy * L.cellDevH;
+              const tipX = birth ? mix(px, cx, t) : mix(cx, px, t);
+              const tipY = birth ? mix(py, cy, t) : mix(cy, py, t);
+              ctx.beginPath();
+              ctx.moveTo(px, py);
+              ctx.lineTo(tipX, tipY);
+              ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
           }
-          const settle = birth ? smoothstep(0.62, 1, t) : 1 - smoothstep(0, 0.38, t);
           if (settle > 0.02) {
             ctx.globalAlpha = settle;
             fillRoundedRect(ctx, cx - L.halfDevW, cy - L.halfDevH, L.halfDevW * 2, L.halfDevH * 2, L.cornerDev);
@@ -547,12 +566,12 @@ export class LifeBlobRenderer {
     const cellCssH = cssH / rows;
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
-    const blobScale = 0.46 + g * 0.04;
+    const blobScale = 0.485 + g * 0.025;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
     const cornerCss = Math.min(halfCssW, halfCssH) * (0.7 + g * 0.3);
-    // Fillet width only — never the old long-range metaball k.
-    const gooeyCss = minCell * (0.055 + g * 0.2);
+    // Wide enough to melt a shared edge, far too short to bridge a vacant cell.
+    const gooeyCss = minCell * (0.15 + g * 0.2);
 
     return {
       cssW,
