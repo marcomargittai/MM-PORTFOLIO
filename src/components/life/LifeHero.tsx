@@ -220,7 +220,7 @@ export default function LifeHero() {
     pauseForPaint();
     const cell = hit(event.clientX, event.clientY);
     if (!cell) return;
-    const erase = event.button === 2 || event.shiftKey || event.altKey;
+    const erase = event.button === 2 || event.shiftKey || event.altKey || engine.get(cell.x, cell.y) === 1;
     paintAliveRef.current = erase ? 0 : 1;
     paintingRef.current = true;
     lastCellRef.current = cell;

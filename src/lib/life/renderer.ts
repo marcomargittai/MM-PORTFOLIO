@@ -187,8 +187,9 @@ export class LifeBlobRenderer {
     if (!canvas) return;
 
     const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
-    const cssW = Math.max(1, canvas.clientWidth);
-    const cssH = Math.max(1, canvas.clientHeight);
+    const parent = canvas.parentElement;
+    const cssW = Math.max(1, canvas.clientWidth || parent?.clientWidth || window.innerWidth);
+    const cssH = Math.max(1, canvas.clientHeight || parent?.clientHeight || window.innerHeight);
     const w = Math.max(1, Math.round(cssW * dpr));
     const h = Math.max(1, Math.round(cssH * dpr));
 
@@ -409,9 +410,16 @@ export class LifeBlobRenderer {
 
   private computeLayout(cols: number, rows: number): Layout {
     const canvas = this.canvas!;
-    const dpr = canvas.width / Math.max(1, canvas.clientWidth);
-    const cssW = canvas.clientWidth;
-    const cssH = canvas.clientHeight;
+    const parent = canvas.parentElement;
+    const cssW = Math.max(
+      1,
+      canvas.clientWidth || parent?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 1),
+    );
+    const cssH = Math.max(
+      1,
+      canvas.clientHeight || parent?.clientHeight || (typeof window !== "undefined" ? window.innerHeight : 1),
+    );
+    const dpr = canvas.width / cssW;
     const cellCssW = cssW / cols;
     const cellCssH = cssH / rows;
     const minCell = Math.min(cellCssW, cellCssH);
