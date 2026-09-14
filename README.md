@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:43173](http://localhost:43173).
+In Cursor, use the **Preview** card (this app runs on the cloud agent, not on your machine). If you open it in Dia or another local browser, use `http://127.0.0.1:43173` — `localhost` and `127.0.0.1` are both allowed.
 
 ```bash
 npm test    # engine + pattern invariants

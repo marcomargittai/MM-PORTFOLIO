@@ -180,25 +180,37 @@ export default function LifeHero() {
   }, []);
 
   const hit = (clientX: number, clientY: number) => {
-    const canvas = canvasRef.current;
-    const renderer = rendererRef.current;
-    if (!canvas || !renderer) return null;
-    const rect = canvas.getBoundingClientRect();
-    const cell = renderer.screenToCell(clientX - rect.left, clientY - rect.top);
-    if (!cell) return null;
-    return { x: cell.col, y: cell.row };
+    const host = hostRef.current;
+    const engine = engineRef.current;
+    if (!host || !engine) return null;
+    const rect = host.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+    const col = Math.min(engine.width - 1, Math.max(0, Math.floor((x / rect.width) * engine.width)));
+    const row = Math.min(engine.height - 1, Math.max(0, Math.floor((y / rect.height) * engine.height)));
+    return { x: col, y: row };
   };
 
-  const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const pauseForPaint = () => {
+    const loop = loopRef.current;
+    if (!loop) return;
+    loop.pause();
+    playingRef.current = false;
+    setPlaying(false);
+  };
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button === 1) return;
-    const canvas = canvasRef.current;
     const engine = engineRef.current;
-    if (!canvas || !engine) return;
+    if (!engine) return;
     event.preventDefault();
-    canvas.setPointerCapture(event.pointerId);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pauseForPaint();
     const cell = hit(event.clientX, event.clientY);
     if (!cell) return;
-    const erase = event.button === 2 || event.altKey || engine.get(cell.x, cell.y) === 1;
+    const erase = event.button === 2 || event.shiftKey || event.altKey;
     paintAliveRef.current = erase ? 0 : 1;
     paintingRef.current = true;
     lastCellRef.current = cell;
@@ -206,7 +218,7 @@ export default function LifeHero() {
     syncHud();
   };
 
-  const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!paintingRef.current) return;
     const engine = engineRef.current;
     if (!engine) return;
@@ -220,12 +232,12 @@ export default function LifeHero() {
     syncHud();
   };
 
-  const endPaint = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const endPaint = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!paintingRef.current) return;
     paintingRef.current = false;
     lastCellRef.current = null;
     try {
-      canvasRef.current?.releasePointerCapture(event.pointerId);
+      event.currentTarget.releasePointerCapture(event.pointerId);
     } catch {
       /* already released */
     }
@@ -350,7 +362,12 @@ export default function LifeHero() {
     >
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        aria-hidden
+      />
+
+      <div
+        className="absolute inset-0 z-10 cursor-crosshair touch-none"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPaint}

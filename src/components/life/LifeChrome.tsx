@@ -18,7 +18,7 @@ type LifeChromeProps = {
 };
 
 const word =
-  "pointer-events-auto cursor-pointer bg-transparent p-0 text-[11px] font-medium uppercase tracking-[0.22em] text-white transition-opacity duration-200 hover:opacity-45 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-4 focus-visible:outline-white";
+  "cursor-pointer bg-transparent p-0 text-[11px] font-medium uppercase tracking-[0.22em] text-white transition-opacity duration-200 hover:opacity-45 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-4 focus-visible:outline-white";
 
 function formatGen(n: number): string {
   return n.toLocaleString("en-US");
@@ -48,8 +48,8 @@ export function LifeChrome({
   ];
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 mix-blend-difference">
-      <header className="absolute inset-x-0 top-0 flex items-start justify-between px-5 pt-5 sm:px-8 sm:pt-8 md:px-12 md:pt-10">
+    <>
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-5 pt-5 mix-blend-difference sm:px-8 sm:pt-8 md:px-12 md:pt-10">
         <div>
           <h1 className={`${serifClassName} text-[34px] leading-none text-white italic sm:text-[44px] md:text-[52px]`}>
             MM
@@ -58,17 +58,17 @@ export function LifeChrome({
             Form that keeps living.
           </p>
         </div>
-        <button type="button" className={`${word} pt-2`} onClick={onInspirations}>
+        <button type="button" className={`${word} pointer-events-auto pt-2`} onClick={onInspirations}>
           {overlayOpen ? "Close" : "Inspirations"}
         </button>
       </header>
 
-      <footer className="absolute inset-x-0 bottom-0 flex flex-col gap-6 px-5 pb-5 sm:px-8 sm:pb-8 md:flex-row md:items-end md:justify-between md:px-12 md:pb-10">
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col gap-6 px-5 pb-5 mix-blend-difference sm:px-8 sm:pb-8 md:flex-row md:items-end md:justify-between md:px-12 md:pb-10">
         <div className="flex flex-col gap-3">
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/70" aria-live="polite">
             {status}
           </p>
-          <nav aria-label="Life" className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <nav aria-label="Life" className="pointer-events-auto flex flex-wrap items-center gap-x-3 gap-y-2">
             {verbs.map((verb, index) => (
               <span key={verb.label} className="flex items-center gap-3">
                 {index > 0 && (
@@ -84,7 +84,7 @@ export function LifeChrome({
           </nav>
         </div>
 
-        <div className="pointer-events-auto flex w-full flex-col gap-3 md:w-64">
+        <div className="pointer-events-auto flex w-full max-w-xs flex-col gap-3 md:w-64">
           <label className="flex flex-col gap-2">
             <span className="flex items-baseline justify-between text-[10px] uppercase tracking-[0.22em]">
               <span>Pace</span>
@@ -112,6 +112,6 @@ export function LifeChrome({
           </p>
         </div>
       </footer>
-    </div>
+    </>
   );
 }
