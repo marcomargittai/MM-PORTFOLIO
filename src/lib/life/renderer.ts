@@ -140,11 +140,21 @@ void main() {
     for (int i = -1; i <= 1; i++) {
       vec2 gc = base + vec2(float(i), float(j));
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
-      sd = smin(sd, cellField(px, gc, t, uHalfExtents, rad, uCornerRadius), k);
+      float d = cellField(px, gc, t, uHalfExtents, rad, uCornerRadius);
+      // Only fillet when both surfaces are already close. A far field
+      // staying in the 3x3 window must not pull a hairline across a gap.
+      if (d < k * 1.6 && sd < k * 1.6) sd = smin(sd, d, k);
+      else sd = min(sd, d);
     }
   }
 
-  float aa = max(uSoftness, fwidth(sd) * 0.55);
+  // Constant AA. fwidth(sd) on a windowed field spikes at cell borders
+  // and draws CAD hairlines through empty space.
+  float aa = max(uSoftness, 1.15);
+  if (sd > aa * 2.5) {
+    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
   float a = 1.0 - smoothstep(-aa, aa, sd);
   fragColor = vec4(vec3(a), 1.0);
 }`;
