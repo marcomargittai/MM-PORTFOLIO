@@ -4,14 +4,20 @@ An artistic [Conway’s Game of Life](https://en.wikipedia.org/wiki/Conway%27s_G
 
 Roughly in the editorial language of Better Half / Cult Holdings: sparse type, no dashboard chrome, the field is the page.
 
-## Run
+## Run (on your Mac)
+
+This is a local app. Cloud desktop preview is too slow to play.
 
 ```bash
+git clone https://github.com/marcomargittai/mm-life.git
+cd mm-life
 npm install
 npm run dev
 ```
 
-In Cursor, use the **Preview** card (this app runs on the cloud agent, not on your machine). If you open it in Dia or another local browser, use `http://127.0.0.1:43173` — `localhost` and `127.0.0.1` are both allowed.
+Open **http://127.0.0.1:43173** in Dia. Edits hot-reload.
+
+Use a **local** Cursor agent for anything you need to see. Use Cloud only for work you will not watch.
 
 ```bash
 npm test    # engine + pattern invariants
