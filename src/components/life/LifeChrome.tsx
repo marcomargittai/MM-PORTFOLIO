@@ -1,5 +1,6 @@
 "use client";
 
+import { GOO_MAX, GOO_MIN } from "@/lib/life/prefs";
 import { HairlineSlider } from "./HairlineSlider";
 
 type LifeChromeProps = {
@@ -107,8 +108,8 @@ export function LifeChrome({
             <HairlineSlider
               label="Goo"
               value={goo}
-              min={0}
-              max={100}
+              min={GOO_MIN}
+              max={GOO_MAX}
               display={String(goo)}
               onChange={onGoo}
             />

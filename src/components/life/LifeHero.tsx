@@ -6,7 +6,7 @@ import { LifeEngine } from "@/lib/life/engine";
 import { LifeLoop } from "@/lib/life/loop";
 import { findPattern, type LifePattern } from "@/lib/life/patterns";
 import { patternCells } from "@/lib/life/patterns";
-import { keepGoo, readGoo, readKeptGoo, writeGoo } from "@/lib/life/prefs";
+import { DEFAULT_GOO, GOO_UNIT, keepGoo, readGoo, readKeptGoo, writeGoo } from "@/lib/life/prefs";
 import { LifeBlobRenderer } from "@/lib/life/renderer";
 import { InspirationsOverlay } from "./InspirationsOverlay";
 import { LifeChrome } from "./LifeChrome";
@@ -83,7 +83,7 @@ export default function LifeHero() {
 
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(DEFAULT_SPEED);
-  const [goo, setGoo] = useState(22);
+  const [goo, setGoo] = useState(DEFAULT_GOO);
   const [keptGoo, setKeptGoo] = useState<number | null>(null);
   const [population, setPopulation] = useState(1);
   const [generation, setGeneration] = useState(0);
@@ -133,7 +133,7 @@ export default function LifeHero() {
 
     const engine = new LifeEngine(cols, rows);
     const renderer = new LifeBlobRenderer();
-    renderer.init(canvas, { wrap: true, goo: initialGoo / 100 });
+    renderer.init(canvas, { wrap: true, goo: initialGoo / GOO_UNIT });
 
     const loop = new LifeLoop({
       engine,
@@ -297,7 +297,7 @@ export default function LifeHero() {
   const changeGoo = useCallback((next: number) => {
     const value = writeGoo(next);
     setGoo(value);
-    rendererRef.current?.setGoo(value / 100);
+    rendererRef.current?.setGoo(value / GOO_UNIT);
   }, []);
 
   const persistGoo = useCallback(() => {

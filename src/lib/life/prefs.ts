@@ -2,8 +2,11 @@ export const GOO_STORAGE_KEY = "mm-life-goo";
 export const GOO_KEPT_KEY = "mm-life-goo-kept";
 
 export const GOO_MIN = 0;
-export const GOO_MAX = 100;
+export const GOO_MAX = 180;
 export const DEFAULT_GOO = 22;
+
+/** Slider units → renderer intensity. 100 is a full melt; the slider goes past it. */
+export const GOO_UNIT = 100;
 
 export function clampGoo(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_GOO;

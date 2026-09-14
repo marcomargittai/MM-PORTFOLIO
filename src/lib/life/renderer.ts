@@ -1,9 +1,13 @@
+import { GOO_MAX, GOO_UNIT } from "./prefs";
+
 export type CellCoord = { col: number; row: number };
 
 export type LifeBlobRendererOptions = {
   goo?: number;
   wrap?: boolean;
 };
+
+const GOO_INTENSITY_MAX = GOO_MAX / GOO_UNIT;
 
 const VERT_SRC = `#version 300 es
 void main() {
@@ -41,9 +45,8 @@ float sdCapsule(vec2 p, vec2 a, vec2 b, float r) {
   return length(pa - ba * h) - r;
 }
 
-// Polynomial smooth-min. Influence dies at distance k, so only cells that
-// already share an edge or corner can fillet. Distant clusters cannot
-// grow hairlines across empty space.
+// Polynomial smooth-min. The extra term dies at |a-b| >= k, so a vacant
+// cell between two live ones cannot grow a filament.
 float smin(float a, float b, float k) {
   float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1e-5), 0.0, 1.0);
   return mix(b, a, h) - k * h * (1.0 - h);
@@ -133,6 +136,7 @@ void main() {
   float t = uBlend * uBlend * (3.0 - 2.0 * uBlend);
   float rad = min(uHalfExtents.x, uHalfExtents.y);
   float k = max(uGooey, 1e-4);
+  float lim = min(uCellSize.x, uCellSize.y) * 0.95;
   float sd = 1e5;
 
   // Chebyshev 1 only — this cell and its eight neighbors. No long-range union.
@@ -141,9 +145,9 @@ void main() {
       vec2 gc = base + vec2(float(i), float(j));
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
       float d = cellField(px, gc, t, uHalfExtents, rad, uCornerRadius);
-      // Only fillet when both surfaces are already close. A far field
-      // staying in the 3x3 window must not pull a hairline across a gap.
-      if (d < k * 1.6 && sd < k * 1.6) sd = smin(sd, d, k);
+      // Fillet anything already inside a cell-length window. Empty sentinels
+      // (1e5) stay a hard min so they cannot drag a hairline across a gap.
+      if (d < lim && sd < lim) sd = smin(sd, d, k);
       else sd = min(sd, d);
     }
   }
@@ -262,7 +266,7 @@ export class LifeBlobRenderer {
   }
 
   setGoo(goo01: number): void {
-    this.goo = Math.min(1, Math.max(0, goo01));
+    this.goo = Math.min(GOO_INTENSITY_MAX, Math.max(0, goo01));
     if (this.layout) this.layout = this.computeLayout(this.layout.cols, this.layout.rows);
   }
 
@@ -576,12 +580,16 @@ export class LifeBlobRenderer {
     const cellCssH = cssH / rows;
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
-    const blobScale = 0.485 + g * 0.025;
+    // Overlap enough that a shared edge is one body. Stay under 0.64 so a
+    // vacant cell between two live ones cannot fill (midpoint sd stays > 0).
+    const blobScale = 0.535 + g * 0.055;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
-    const cornerCss = Math.min(halfCssW, halfCssH) * (0.7 + g * 0.3);
-    // Wide enough to melt a shared edge, far too short to bridge a vacant cell.
-    const gooeyCss = minCell * (0.15 + g * 0.2);
+    // Full stadium — no box corners, no hex facets.
+    const cornerCss = Math.min(halfCssW, halfCssH);
+    // Polynomial smin pulls by k/4. At 180 this is ~0.31×cell, still short
+    // of the vacant-cell midpoint (~0.37×cell).
+    const gooeyCss = minCell * (0.55 + g * 0.38);
 
     return {
       cssW,
