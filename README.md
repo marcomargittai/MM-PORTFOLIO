@@ -32,4 +32,4 @@ The board is a torus. Edges wrap.
 
 ## Stack
 
-Next.js, TypeScript, Tailwind. The simulation is a typed-array engine; the liquid look is a WebGL2 smooth-union of rounded boxes, with a Canvas2D gooey fallback.
+Next.js, TypeScript, Tailwind. The simulation is a typed-array engine. New cells grow out of the live neighbors they attach to, so a birth is a nub on an existing blob rather than a satellite that pops from its own center. Adjacent cells fillet; distant clusters do not.

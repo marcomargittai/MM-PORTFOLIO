@@ -24,7 +24,6 @@ uniform float uCornerRadius;
 uniform float uGooey;
 uniform float uSoftness;
 uniform float uWrap;
-uniform float uRange;
 uniform float uBlend;
 
 out vec4 fragColor;
@@ -33,6 +32,78 @@ float sdRoundedBox(vec2 p, vec2 b, float r) {
   float rr = min(r, min(b.x, b.y));
   vec2 q = abs(p) - b + rr;
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
+}
+
+float sdCapsule(vec2 p, vec2 a, vec2 b, float r) {
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+  return length(pa - ba * h) - r;
+}
+
+// Polynomial smooth-min. Influence dies at distance k, so only cells that
+// already share an edge or corner can fillet. Distant clusters cannot
+// grow hairlines across empty space.
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1e-5), 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+vec2 wrapCell(vec2 c, vec2 g) {
+  return mod(mod(c, g) + g, g);
+}
+
+bool inGrid(vec2 c, vec2 g) {
+  return c.x >= 0.0 && c.y >= 0.0 && c.x < g.x && c.y < g.y;
+}
+
+vec2 sampleOcc(vec2 gc) {
+  vec2 tc = uWrap >= 0.5 ? wrapCell(gc, uGridSize) : gc;
+  if (uWrap < 0.5 && !inGrid(tc, uGridSize)) return vec2(0.0);
+  return texelFetch(uGrid, ivec2(tc), 0).rg;
+}
+
+// Grow or retract along every live neighbor so a new square is a nub
+// on the existing blob, never a satellite that pops from its own center.
+float morphFromNeighbors(vec2 px, vec2 gc, vec2 center, bool birth, float t, float rad, vec2 halfExt, float rr) {
+  float dGrow = 1e5;
+  bool anyParent = false;
+
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      if (i == 0 && j == 0) continue;
+      vec2 parentGc = gc + vec2(float(i), float(j));
+      vec2 nocc = sampleOcc(parentGc);
+      float parentLive = birth ? nocc.x : nocc.y;
+      if (parentLive < 0.5) continue;
+      anyParent = true;
+      vec2 parentC = uOrigin + (parentGc + 0.5) * uCellSize;
+      vec2 tip = birth ? mix(parentC, center, t) : mix(center, parentC, t);
+      dGrow = min(dGrow, sdCapsule(px, parentC, tip, rad));
+    }
+  }
+
+  float dBox = sdRoundedBox(px - center, halfExt, rr);
+  if (!anyParent) {
+    float s = birth ? t : (1.0 - t);
+    if (s < 0.02) return 1e5;
+    return sdRoundedBox(px - center, halfExt * s, rr * s);
+  }
+  if (birth) return mix(dGrow, dBox, smoothstep(0.62, 1.0, t));
+  return mix(dBox, dGrow, smoothstep(0.0, 0.38, t));
+}
+
+float cellField(vec2 px, vec2 gc, float t, vec2 halfExt, float rad, float rr) {
+  vec2 occ = sampleOcc(gc);
+  float prev = occ.x;
+  float next = occ.y;
+  if (prev < 0.5 && next < 0.5) return 1e5;
+
+  vec2 center = uOrigin + (gc + 0.5) * uCellSize;
+  if (prev > 0.5 && next > 0.5) {
+    return sdRoundedBox(px - center, halfExt, rr);
+  }
+  return morphFromNeighbors(px, gc, center, next > 0.5, t, rad, halfExt, rr);
 }
 
 void main() {
@@ -47,42 +118,21 @@ void main() {
     return;
   }
 
-  ivec2 base = ivec2(floor(gridPos));
-  int range = int(uRange + 0.5);
-  float k = max(uGooey, 0.75);
-  float acc = 0.0;
-  vec2 gs = uGridSize;
+  vec2 base = floor(gridPos);
   float t = uBlend * uBlend * (3.0 - 2.0 * uBlend);
+  float rad = min(uHalfExtents.x, uHalfExtents.y);
+  float k = max(uGooey, 1e-4);
+  float sd = 1e5;
 
-  for (int j = -4; j <= 4; j++) {
-    for (int i = -4; i <= 4; i++) {
-      if (abs(i) > range || abs(j) > range) continue;
-
-      ivec2 gc = base + ivec2(i, j);
-      vec2 tc = vec2(gc);
-
-      if (uWrap >= 0.5) {
-        tc = mod(mod(tc, gs) + gs, gs);
-      } else if (tc.x < 0.0 || tc.y < 0.0 || tc.x >= gs.x || tc.y >= gs.y) {
-        continue;
-      }
-
-      vec2 occ = texelFetch(uGrid, ivec2(tc), 0).rg;
-      float s = mix(occ.x, occ.y, t);
-      if (s < 0.02) continue;
-
-      vec2 center = uOrigin + (vec2(gc) + 0.5) * uCellSize;
-      float d = sdRoundedBox(px - center, uHalfExtents * s, uCornerRadius * s);
-      acc += exp2(-d / k);
+  // Chebyshev 1 only — this cell and its eight neighbors. No long-range union.
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 gc = base + vec2(float(i), float(j));
+      if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
+      sd = smin(sd, cellField(px, gc, t, uHalfExtents, rad, uCornerRadius), k);
     }
   }
 
-  if (acc <= 1e-7) {
-    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
-    return;
-  }
-
-  float sd = -k * log2(acc);
   float aa = max(uSoftness, fwidth(sd) * 0.55);
   float a = 1.0 - smoothstep(-aa, aa, sd);
   fragColor = vec4(vec3(a), 1.0);
@@ -120,9 +170,21 @@ type GlUniforms = {
   uGooey: WebGLUniformLocation;
   uSoftness: WebGLUniformLocation;
   uWrap: WebGLUniformLocation;
-  uRange: WebGLUniformLocation;
   uBlend: WebGLUniformLocation;
 };
+
+const ORTHO: Array<[number, number]> = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+const DIAG: Array<[number, number]> = [
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+];
 
 export class LifeBlobRenderer {
   goo = 0.22;
@@ -311,7 +373,6 @@ export class LifeBlobRenderer {
       uGooey: loc("uGooey"),
       uSoftness: loc("uSoftness"),
       uWrap: loc("uWrap"),
-      uRange: loc("uRange"),
       uBlend: loc("uBlend"),
     };
   }
@@ -362,7 +423,6 @@ export class LifeBlobRenderer {
     gl.uniform1f(u.uGooey, L.gooeyDev);
     gl.uniform1f(u.uSoftness, L.softDev);
     gl.uniform1f(u.uWrap, this.wrap ? 1 : 0);
-    gl.uniform1f(u.uRange, L.range);
     gl.uniform1f(u.uBlend, this.blend);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -381,29 +441,92 @@ export class LifeBlobRenderer {
     const h = canvas.height;
     const t = this.blend * this.blend * (3 - 2 * this.blend);
     const replicas = this.wrap ? [-1, 0, 1] : [0];
+    const rad = Math.min(L.halfDevW, L.halfDevH);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#fff";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = rad * 2;
+
+    const live = (grid: Uint8Array | Uint8ClampedArray, c: number, r: number) => {
+      let x = c;
+      let y = r;
+      if (this.wrap) {
+        x = ((c % cols) + cols) % cols;
+        y = ((r % rows) + rows) % rows;
+      } else if (c < 0 || r < 0 || c >= cols || r >= rows) {
+        return false;
+      }
+      return grid[y * cols + x] !== 0;
+    };
+
+    const eachReplica = (c: number, r: number, draw: (cx: number, cy: number) => void) => {
+      for (const oy of replicas) {
+        if (oy !== 0 && r > 3 && r < rows - 4) continue;
+        for (const ox of replicas) {
+          if (ox !== 0 && c > 3 && c < cols - 4) continue;
+          const cx = L.originDevX + (c + ox * cols + 0.5) * L.cellDevW;
+          const cy = L.originDevY + (r + oy * rows + 0.5) * L.cellDevH;
+          draw(cx, cy);
+        }
+      }
+    };
 
     for (let r = 0; r < rows; r++) {
       const rowOff = r * cols;
       for (let c = 0; c < cols; c++) {
-        const s = (previous[rowOff + c] ? 1 : 0) * (1 - t) + (current[rowOff + c] ? 1 : 0) * t;
-        if (s < 0.02) continue;
-        const hw = L.halfDevW * s;
-        const hh = L.halfDevH * s;
-        const cr = L.cornerDev * s;
-        for (const oy of replicas) {
-          if (oy !== 0 && r > 3 && r < rows - 4) continue;
-          for (const ox of replicas) {
-            if (ox !== 0 && c > 3 && c < cols - 4) continue;
-            const cx = L.originDevX + (c + ox * cols + 0.5) * L.cellDevW;
-            const cy = L.originDevY + (r + oy * rows + 0.5) * L.cellDevH;
-            fillRoundedRect(ctx, cx - hw, cy - hh, hw * 2, hh * 2, cr);
-          }
+        const prev = previous[rowOff + c] ? 1 : 0;
+        const next = current[rowOff + c] ? 1 : 0;
+        if (!prev && !next) continue;
+
+        if (prev && next) {
+          eachReplica(c, r, (cx, cy) => {
+            fillRoundedRect(ctx, cx - L.halfDevW, cy - L.halfDevH, L.halfDevW * 2, L.halfDevH * 2, L.cornerDev);
+          });
+          continue;
         }
+
+        const birth = !prev && next;
+        const parents = neighborsOf(c, r, (x, y) => live(birth ? previous : current, x, y));
+
+        if (parents.length === 0) {
+          const s = birth ? t : 1 - t;
+          if (s < 0.02) continue;
+          eachReplica(c, r, (cx, cy) => {
+            fillRoundedRect(
+              ctx,
+              cx - L.halfDevW * s,
+              cy - L.halfDevH * s,
+              L.halfDevW * 2 * s,
+              L.halfDevH * 2 * s,
+              L.cornerDev * s,
+            );
+          });
+          continue;
+        }
+
+        eachReplica(c, r, (cx, cy) => {
+          for (const [dx, dy] of parents) {
+            const px = cx + dx * L.cellDevW;
+            const py = cy + dy * L.cellDevH;
+            const tipX = birth ? mix(px, cx, t) : mix(cx, px, t);
+            const tipY = birth ? mix(py, cy, t) : mix(cy, py, t);
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.lineTo(tipX, tipY);
+            ctx.stroke();
+          }
+          const settle = birth ? smoothstep(0.62, 1, t) : 1 - smoothstep(0, 0.38, t);
+          if (settle > 0.02) {
+            ctx.globalAlpha = settle;
+            fillRoundedRect(ctx, cx - L.halfDevW, cy - L.halfDevH, L.halfDevW * 2, L.halfDevH * 2, L.cornerDev);
+            ctx.globalAlpha = 1;
+          }
+        });
       }
     }
   }
@@ -428,9 +551,8 @@ export class LifeBlobRenderer {
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
     const cornerCss = Math.min(halfCssW, halfCssH) * (0.7 + g * 0.3);
-    const gooeyCss = Math.max(0.6, minCell * (0.05 + g * 0.5));
-    const influence = Math.max(halfCssW, halfCssH) + gooeyCss * 3.2;
-    const range = Math.max(1, Math.min(4, Math.ceil(influence / Math.max(1, minCell))));
+    // Fillet width only — never the old long-range metaball k.
+    const gooeyCss = minCell * (0.055 + g * 0.2);
 
     return {
       cssW,
@@ -450,7 +572,7 @@ export class LifeBlobRenderer {
       cornerDev: cornerCss * dpr,
       gooeyDev: gooeyCss * dpr,
       softDev: this.softness * dpr,
-      range,
+      range: 1,
     };
   }
 
@@ -469,6 +591,26 @@ export class LifeBlobRenderer {
     this.texCols = 0;
     this.texRows = 0;
   }
+}
+
+function neighborsOf(c: number, r: number, live: (x: number, y: number) => boolean): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const [dx, dy] of ORTHO) {
+    if (live(c + dx, r + dy)) out.push([dx, dy]);
+  }
+  for (const [dx, dy] of DIAG) {
+    if (live(c + dx, r + dy)) out.push([dx, dy]);
+  }
+  return out;
+}
+
+function mix(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function smoothstep(e0: number, e1: number, x: number) {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {

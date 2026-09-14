@@ -387,7 +387,7 @@ export default function LifeHero() {
     >
       <canvas
         ref={canvasRef}
-        className="pointer-events-none absolute inset-0 h-full w-full"
+        className="pointer-events-none absolute inset-0 block h-full w-full outline-none"
         aria-hidden
       />
 
