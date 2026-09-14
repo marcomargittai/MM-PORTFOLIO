@@ -49,7 +49,7 @@ export function LifeChrome({
 
   return (
     <>
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-5 pt-5 mix-blend-difference sm:px-8 sm:pt-8 md:px-12 md:pt-10">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between px-5 pt-5 sm:px-8 sm:pt-8 md:px-12 md:pt-10">
         <div>
           <h1 className={`${serifClassName} text-[34px] leading-none text-white italic sm:text-[44px] md:text-[52px]`}>
             MM
@@ -63,7 +63,7 @@ export function LifeChrome({
         </button>
       </header>
 
-      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col gap-6 px-5 pb-5 mix-blend-difference sm:px-8 sm:pb-8 md:flex-row md:items-end md:justify-between md:px-12 md:pb-10">
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col gap-6 px-5 pb-5 sm:px-8 sm:pb-8 md:flex-row md:items-end md:justify-between md:px-12 md:pb-10">
         <div className="flex flex-col gap-3">
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/70" aria-live="polite">
             {status}
