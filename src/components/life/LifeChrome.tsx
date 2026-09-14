@@ -1,5 +1,7 @@
 "use client";
 
+import { HairlineSlider } from "./HairlineSlider";
+
 type LifeChromeProps = {
   serifClassName: string;
   playing: boolean;
@@ -7,6 +9,8 @@ type LifeChromeProps = {
   speed: number;
   speedMin: number;
   speedMax: number;
+  goo: number;
+  keptGoo: number | null;
   generation: number;
   overlayOpen: boolean;
   onTogglePlay: () => void;
@@ -14,6 +18,8 @@ type LifeChromeProps = {
   onClear: () => void;
   onChance: () => void;
   onSpeed: (value: number) => void;
+  onGoo: (value: number) => void;
+  onKeepGoo: () => void;
   onInspirations: () => void;
 };
 
@@ -31,6 +37,8 @@ export function LifeChrome({
   speed,
   speedMin,
   speedMax,
+  goo,
+  keptGoo,
   generation,
   overlayOpen,
   onTogglePlay,
@@ -38,6 +46,8 @@ export function LifeChrome({
   onClear,
   onChance,
   onSpeed,
+  onGoo,
+  onKeepGoo,
   onInspirations,
 }: LifeChromeProps) {
   const verbs = [
@@ -84,29 +94,33 @@ export function LifeChrome({
           </nav>
         </div>
 
-        <div className="pointer-events-auto flex w-full max-w-xs flex-col gap-3 md:w-64">
-          <label className="flex flex-col gap-2">
-            <span className="flex items-baseline justify-between text-[10px] uppercase tracking-[0.22em]">
-              <span>Pace</span>
-              <span className="tabular-nums">
-                {speed}
-                <span className="opacity-40"> /s</span>
+        <div className="pointer-events-auto flex w-full max-w-xs flex-col gap-5 md:w-72">
+          <HairlineSlider
+            label="Pace"
+            value={speed}
+            min={speedMin}
+            max={speedMax}
+            display={`${speed} /s`}
+            onChange={onSpeed}
+          />
+          <div className="flex flex-col gap-2">
+            <HairlineSlider
+              label="Goo"
+              value={goo}
+              min={0}
+              max={100}
+              display={String(goo)}
+              onChange={onGoo}
+            />
+            <div className="flex items-baseline justify-between text-[10px] uppercase tracking-[0.22em]">
+              <button type="button" className={word} onClick={onKeepGoo}>
+                Keep
+              </button>
+              <span className="text-white/40 tabular-nums">
+                {keptGoo == null ? "Nothing kept" : `Kept ${keptGoo}`}
               </span>
-            </span>
-            <div className="relative flex h-7 items-center">
-              <div aria-hidden className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-white" />
-              <input
-                type="range"
-                min={speedMin}
-                max={speedMax}
-                step={1}
-                value={speed}
-                aria-label="Play speed in generations per second"
-                className="relative z-10 h-7 w-full cursor-ew-resize appearance-none bg-transparent [&::-moz-range-thumb]:h-2 [&::-moz-range-thumb]:w-2 [&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-moz-range-track]:h-px [&::-moz-range-track]:bg-white [&::-webkit-slider-runnable-track]:h-px [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:h-2 [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-none [&::-webkit-slider-thumb]:bg-white"
-                onChange={(event) => onSpeed(Number(event.target.value))}
-              />
             </div>
-          </label>
+          </div>
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/40 tabular-nums">
             Gen. {formatGen(generation)}
           </p>

@@ -23,6 +23,7 @@ npm run lint
 - **Draw** on the field. Click a live cell to erase; drag to paint.
 - **Play / Pause**, **Step**, **Clear**, **Chance**
 - **Pace** — generations per second, 1–60
+- **Goo** — live liquid melt. Drag it, then **Keep** to save the value (tell me the number later and I’ll lock it in)
 - **Inspirations** — load Gosper’s gun, the pulsar, acorn, copperhead, the fleet, and the rest
 
 Keyboard: `Space` play/pause · arrows step · `C` clear · `R` chance · `I` inspirations · `+` / `-` pace · `Esc` close

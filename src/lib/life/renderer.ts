@@ -1,11 +1,7 @@
 export type CellCoord = { col: number; row: number };
 
 export type LifeBlobRendererOptions = {
-  blobRadius?: number;
-  gooeyness?: number;
-  softness?: number;
-  cellSize?: number;
-  cornerRadius?: number;
+  goo?: number;
   wrap?: boolean;
 };
 
@@ -29,6 +25,7 @@ uniform float uGooey;
 uniform float uSoftness;
 uniform float uWrap;
 uniform float uRange;
+uniform float uBlend;
 
 out vec4 fragColor;
 
@@ -52,9 +49,10 @@ void main() {
 
   ivec2 base = ivec2(floor(gridPos));
   int range = int(uRange + 0.5);
-  float k = max(uGooey, 1.5);
+  float k = max(uGooey, 0.75);
   float acc = 0.0;
   vec2 gs = uGridSize;
+  float t = uBlend * uBlend * (3.0 - 2.0 * uBlend);
 
   for (int j = -4; j <= 4; j++) {
     for (int i = -4; i <= 4; i++) {
@@ -69,10 +67,12 @@ void main() {
         continue;
       }
 
-      if (texelFetch(uGrid, ivec2(tc), 0).r < 0.5) continue;
+      vec2 occ = texelFetch(uGrid, ivec2(tc), 0).rg;
+      float s = mix(occ.x, occ.y, t);
+      if (s < 0.02) continue;
 
       vec2 center = uOrigin + (vec2(gc) + 0.5) * uCellSize;
-      float d = sdRoundedBox(px - center, uHalfExtents, uCornerRadius);
+      float d = sdRoundedBox(px - center, uHalfExtents * s, uCornerRadius * s);
       acc += exp2(-d / k);
     }
   }
@@ -83,9 +83,9 @@ void main() {
   }
 
   float sd = -k * log2(acc);
-  float aa = max(uSoftness, fwidth(sd) * 0.7);
+  float aa = max(uSoftness, fwidth(sd) * 0.55);
   float a = 1.0 - smoothstep(-aa, aa, sd);
-  fragColor = vec4(a, a, a, 1.0);
+  fragColor = vec4(vec3(a), 1.0);
 }`;
 
 type Layout = {
@@ -121,15 +121,13 @@ type GlUniforms = {
   uSoftness: WebGLUniformLocation;
   uWrap: WebGLUniformLocation;
   uRange: WebGLUniformLocation;
+  uBlend: WebGLUniformLocation;
 };
 
 export class LifeBlobRenderer {
-  blobRadius?: number;
-  gooeyness?: number;
-  softness = 0.35;
-  cellSize?: number;
-  cornerRadius?: number;
+  goo = 0.22;
   wrap = true;
+  softness = 0.2;
 
   private canvas: HTMLCanvasElement | null = null;
   private gl: WebGL2RenderingContext | null = null;
@@ -140,6 +138,7 @@ export class LifeBlobRenderer {
   private texCols = 0;
   private texRows = 0;
   private upload: Uint8Array | null = null;
+  private blend = 1;
 
   private ctx2d: CanvasRenderingContext2D | null = null;
   private off2d: HTMLCanvasElement | OffscreenCanvas | null = null;
@@ -150,11 +149,7 @@ export class LifeBlobRenderer {
   init(canvas: HTMLCanvasElement, opts: LifeBlobRendererOptions = {}): void {
     this.dispose();
     this.canvas = canvas;
-    this.blobRadius = opts.blobRadius;
-    this.gooeyness = opts.gooeyness;
-    this.softness = opts.softness ?? 0.35;
-    this.cellSize = opts.cellSize;
-    this.cornerRadius = opts.cornerRadius;
+    this.goo = opts.goo ?? 0.22;
     this.wrap = opts.wrap ?? true;
 
     const gl = canvas.getContext("webgl2", {
@@ -180,6 +175,11 @@ export class LifeBlobRenderer {
     }
 
     this.resize();
+  }
+
+  setGoo(goo01: number): void {
+    this.goo = Math.min(1, Math.max(0, goo01));
+    if (this.layout) this.layout = this.computeLayout(this.layout.cols, this.layout.rows);
   }
 
   resize(): void {
@@ -211,34 +211,26 @@ export class LifeBlobRenderer {
     }
   }
 
-  render(grid: Uint8Array | Uint8ClampedArray, cols: number, rows: number): void {
+  render(
+    previous: Uint8Array | Uint8ClampedArray,
+    current: Uint8Array | Uint8ClampedArray,
+    cols: number,
+    rows: number,
+    blend = 1,
+  ): void {
     if (!this.canvas || cols < 1 || rows < 1) return;
-    if (grid.length < cols * rows) return;
+    const n = cols * rows;
+    if (previous.length < n || current.length < n) return;
 
+    this.blend = blend < 0 ? 0 : blend > 1 ? 1 : blend;
     this.layout = this.computeLayout(cols, rows);
-    const packed = this.pack(grid, cols, rows);
+    const packed = this.pack(previous, current, cols, rows);
 
     if (this.gl && this.program && this.vao && this.tex && this.uniforms) {
       this.renderGl(packed, cols, rows);
     } else if (this.ctx2d && this.offCtx && this.off2d) {
-      this.render2d(grid, cols, rows);
+      this.render2d(previous, current, cols, rows);
     }
-  }
-
-  screenToCell(x: number, y: number): CellCoord | null {
-    const L = this.layout;
-    if (!L) return null;
-
-    const colF = (x - L.originCssX) / L.cellCssW;
-    const rowF = (y - L.originCssY) / L.cellCssH;
-
-    if (this.wrap) {
-      if (x < 0 || y < 0 || x >= L.cssW || y >= L.cssH) return null;
-      return { col: Math.floor(mod(colF, L.cols)), row: Math.floor(mod(rowF, L.rows)) };
-    }
-
-    if (colF < 0 || rowF < 0 || colF >= L.cols || rowF >= L.rows) return null;
-    return { col: Math.floor(colF), row: Math.floor(rowF) };
   }
 
   dispose(): void {
@@ -251,13 +243,21 @@ export class LifeBlobRenderer {
     this.upload = null;
   }
 
-  private pack(grid: Uint8Array | Uint8ClampedArray, cols: number, rows: number): Uint8Array {
+  private pack(
+    previous: Uint8Array | Uint8ClampedArray,
+    current: Uint8Array | Uint8ClampedArray,
+    cols: number,
+    rows: number,
+  ): Uint8Array {
     const n = cols * rows;
-    if (!this.upload || this.upload.length !== n) {
-      this.upload = new Uint8Array(n);
+    if (!this.upload || this.upload.length !== n * 2) {
+      this.upload = new Uint8Array(n * 2);
     }
     const out = this.upload;
-    for (let i = 0; i < n; i++) out[i] = grid[i] ? 255 : 0;
+    for (let i = 0; i < n; i++) {
+      out[i * 2] = previous[i] ? 255 : 0;
+      out[i * 2 + 1] = current[i] ? 255 : 0;
+    }
     return out;
   }
 
@@ -311,6 +311,7 @@ export class LifeBlobRenderer {
       uSoftness: loc("uSoftness"),
       uWrap: loc("uWrap"),
       uRange: loc("uRange"),
+      uBlend: loc("uBlend"),
     };
   }
 
@@ -333,16 +334,18 @@ export class LifeBlobRenderer {
 
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     if (cols !== this.texCols || rows !== this.texRows) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cols, rows, 0, gl.RED, gl.UNSIGNED_BYTE, grid);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, cols, rows, 0, gl.RG, gl.UNSIGNED_BYTE, grid);
       this.texCols = cols;
       this.texRows = rows;
     } else {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cols, rows, gl.RED, gl.UNSIGNED_BYTE, grid);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cols, rows, gl.RG, gl.UNSIGNED_BYTE, grid);
     }
 
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
     gl.activeTexture(gl.TEXTURE0);
@@ -359,51 +362,49 @@ export class LifeBlobRenderer {
     gl.uniform1f(u.uSoftness, L.softDev);
     gl.uniform1f(u.uWrap, this.wrap ? 1 : 0);
     gl.uniform1f(u.uRange, L.range);
+    gl.uniform1f(u.uBlend, this.blend);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  private render2d(grid: Uint8Array | Uint8ClampedArray, cols: number, rows: number): void {
+  private render2d(
+    previous: Uint8Array | Uint8ClampedArray,
+    current: Uint8Array | Uint8ClampedArray,
+    cols: number,
+    rows: number,
+  ): void {
     const canvas = this.canvas!;
     const ctx = this.ctx2d!;
-    const off = this.offCtx!;
     const L = this.layout!;
     const w = canvas.width;
     const h = canvas.height;
-
-    off.setTransform(1, 0, 0, 1, 0, 0);
-    off.fillStyle = "#000";
-    off.fillRect(0, 0, w, h);
-    off.fillStyle = "#fff";
-
-    const hw = L.halfDevW;
-    const hh = L.halfDevH;
-    const cr = L.cornerDev;
+    const t = this.blend * this.blend * (3 - 2 * this.blend);
     const replicas = this.wrap ? [-1, 0, 1] : [0];
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "#fff";
 
     for (let r = 0; r < rows; r++) {
       const rowOff = r * cols;
       for (let c = 0; c < cols; c++) {
-        if (grid[rowOff + c] === 0) continue;
+        const s = (previous[rowOff + c] ? 1 : 0) * (1 - t) + (current[rowOff + c] ? 1 : 0) * t;
+        if (s < 0.02) continue;
+        const hw = L.halfDevW * s;
+        const hh = L.halfDevH * s;
+        const cr = L.cornerDev * s;
         for (const oy of replicas) {
           if (oy !== 0 && r > 3 && r < rows - 4) continue;
           for (const ox of replicas) {
             if (ox !== 0 && c > 3 && c < cols - 4) continue;
             const cx = L.originDevX + (c + ox * cols + 0.5) * L.cellDevW;
             const cy = L.originDevY + (r + oy * rows + 0.5) * L.cellDevH;
-            fillRoundedRect(off, cx - hw, cy - hh, hw * 2, hh * 2, cr);
+            fillRoundedRect(ctx, cx - hw, cy - hh, hw * 2, hh * 2, cr);
           }
         }
       }
     }
-
-    const blurPx = Math.max(1.5, L.gooeyDev * 0.38);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, w, h);
-    ctx.filter = `blur(${blurPx}px) contrast(32)`;
-    ctx.drawImage(this.off2d as CanvasImageSource, 0, 0);
-    ctx.filter = "none";
   }
 
   private computeLayout(cols: number, rows: number): Layout {
@@ -411,57 +412,36 @@ export class LifeBlobRenderer {
     const dpr = canvas.width / Math.max(1, canvas.clientWidth);
     const cssW = canvas.clientWidth;
     const cssH = canvas.clientHeight;
-
-    let cellCssW: number;
-    let cellCssH: number;
-    let originCssX: number;
-    let originCssY: number;
-
-    if (this.cellSize != null && this.cellSize > 0) {
-      cellCssW = this.cellSize;
-      cellCssH = this.cellSize;
-      originCssX = (cssW - cols * cellCssW) * 0.5;
-      originCssY = (cssH - rows * cellCssH) * 0.5;
-    } else {
-      cellCssW = cssW / cols;
-      cellCssH = cssH / rows;
-      originCssX = 0;
-      originCssY = 0;
-    }
-
+    const cellCssW = cssW / cols;
+    const cellCssH = cssH / rows;
     const minCell = Math.min(cellCssW, cellCssH);
-    const blobCss = this.blobRadius ?? minCell * 0.5;
-    const t = blobCss / (minCell * 0.5);
-    const halfCssW = cellCssW * 0.5 * t;
-    const halfCssH = cellCssH * 0.5 * t;
-    const cornerCss = Math.min(
-      this.cornerRadius ?? Math.min(halfCssW, halfCssH),
-      Math.min(halfCssW, halfCssH),
-    );
-    const gooeyCss = Math.max(2, this.gooeyness ?? minCell * 0.48);
-    const softCss = Math.max(0, this.softness);
-
-    const influence = Math.max(halfCssW, halfCssH) + gooeyCss * 3.4;
-    const range = Math.max(1, Math.min(4, Math.ceil(influence / minCell)));
+    const g = this.goo;
+    const blobScale = 0.46 + g * 0.04;
+    const halfCssW = cellCssW * blobScale;
+    const halfCssH = cellCssH * blobScale;
+    const cornerCss = Math.min(halfCssW, halfCssH) * (0.7 + g * 0.3);
+    const gooeyCss = Math.max(0.6, minCell * (0.05 + g * 0.5));
+    const influence = Math.max(halfCssW, halfCssH) + gooeyCss * 3.2;
+    const range = Math.max(1, Math.min(4, Math.ceil(influence / Math.max(1, minCell))));
 
     return {
       cssW,
       cssH,
       cols,
       rows,
-      originCssX,
-      originCssY,
+      originCssX: 0,
+      originCssY: 0,
       cellCssW,
       cellCssH,
-      originDevX: originCssX * dpr,
-      originDevY: originCssY * dpr,
+      originDevX: 0,
+      originDevY: 0,
       cellDevW: cellCssW * dpr,
       cellDevH: cellCssH * dpr,
       halfDevW: halfCssW * dpr,
       halfDevH: halfCssH * dpr,
       cornerDev: cornerCss * dpr,
       gooeyDev: gooeyCss * dpr,
-      softDev: softCss * dpr,
+      softDev: this.softness * dpr,
       range,
     };
   }
@@ -494,10 +474,6 @@ function compileShader(gl: WebGL2RenderingContext, type: number, src: string): W
     throw new Error(log);
   }
   return sh;
-}
-
-function mod(n: number, m: number): number {
-  return ((n % m) + m) % m;
 }
 
 function fillRoundedRect(

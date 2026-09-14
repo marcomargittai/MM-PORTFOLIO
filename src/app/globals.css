@@ -29,3 +29,19 @@ body {
   background: #fff;
   color: #000;
 }
+
+input[type="range"] {
+  appearance: none;
+  background: transparent;
+}
+
+input[type="range"]::-webkit-slider-runnable-track,
+input[type="range"]::-webkit-slider-thumb,
+input[type="range"]::-moz-range-track,
+input[type="range"]::-moz-range-thumb,
+input[type="range"]::-moz-range-progress {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}

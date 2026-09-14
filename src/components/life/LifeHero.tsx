@@ -6,6 +6,7 @@ import { LifeEngine } from "@/lib/life/engine";
 import { LifeLoop } from "@/lib/life/loop";
 import { findPattern, type LifePattern } from "@/lib/life/patterns";
 import { patternCells } from "@/lib/life/patterns";
+import { keepGoo, readGoo, readKeptGoo, writeGoo } from "@/lib/life/prefs";
 import { LifeBlobRenderer } from "@/lib/life/renderer";
 import { InspirationsOverlay } from "./InspirationsOverlay";
 import { LifeChrome } from "./LifeChrome";
@@ -82,6 +83,8 @@ export default function LifeHero() {
 
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(DEFAULT_SPEED);
+  const [goo, setGoo] = useState(22);
+  const [keptGoo, setKeptGoo] = useState<number | null>(null);
   const [population, setPopulation] = useState(1);
   const [generation, setGeneration] = useState(0);
   const [overlayOpen, setOverlayOpen] = useState(false);
@@ -99,6 +102,7 @@ export default function LifeHero() {
       const loop = loopRef.current;
       if (!engine || !loop) return;
       stampCentered(engine, pattern);
+      loop.align();
       if (autoplay) {
         loop.play();
         playingRef.current = true;
@@ -123,15 +127,19 @@ export default function LifeHero() {
       Math.max(1, canvas.clientHeight || host.clientHeight || window.innerHeight),
     );
 
+    const initialGoo = readGoo();
+    setGoo(initialGoo);
+    setKeptGoo(readKeptGoo());
+
     const engine = new LifeEngine(cols, rows);
     const renderer = new LifeBlobRenderer();
-    renderer.init(canvas, { wrap: true });
+    renderer.init(canvas, { wrap: true, goo: initialGoo / 100 });
 
     const loop = new LifeLoop({
       engine,
       speed: DEFAULT_SPEED,
-      onFrame: ({ steps }) => {
-        renderer.render(engine.cells, engine.width, engine.height);
+      onFrame: ({ steps, blend, previous, current }) => {
+        renderer.render(previous, current, engine.width, engine.height, blend);
         if (steps > 0) {
           setGeneration(engine.generation);
           if (engine.generation % 4 === 0) {
@@ -147,6 +155,7 @@ export default function LifeHero() {
 
     const pattern = findPattern(DEFAULT_PATTERN);
     if (pattern) stampCentered(engine, pattern);
+    loop.align();
 
     loop.start();
     loop.play();
@@ -161,6 +170,7 @@ export default function LifeHero() {
       const next = gridFor(w, h);
       if (engine.width !== next.cols || engine.height !== next.rows) {
         engine.resize(next.cols, next.rows);
+        loop.align();
       }
       renderer.resize();
     };
@@ -215,6 +225,7 @@ export default function LifeHero() {
     paintingRef.current = true;
     lastCellRef.current = cell;
     engine.set(cell.x, cell.y, paintAliveRef.current);
+    loopRef.current?.align();
     syncHud();
   };
 
@@ -229,6 +240,7 @@ export default function LifeHero() {
     if (last) engine.paintLine(last.x, last.y, cell.x, cell.y, paintAliveRef.current);
     else engine.set(cell.x, cell.y, paintAliveRef.current);
     lastCellRef.current = cell;
+    loopRef.current?.align();
     syncHud();
   };
 
@@ -264,6 +276,7 @@ export default function LifeHero() {
   const clear = useCallback(() => {
     engineRef.current?.clear();
     loopRef.current?.pause();
+    loopRef.current?.align();
     playingRef.current = false;
     setPlaying(false);
     syncHud();
@@ -271,6 +284,7 @@ export default function LifeHero() {
 
   const chance = useCallback(() => {
     engineRef.current?.randomize(0.11);
+    loopRef.current?.align();
     syncHud();
   }, [syncHud]);
 
@@ -279,6 +293,17 @@ export default function LifeHero() {
     loopRef.current?.setSpeed(clamped);
     setSpeed(clamped);
   }, []);
+
+  const changeGoo = useCallback((next: number) => {
+    const value = writeGoo(next);
+    setGoo(value);
+    rendererRef.current?.setGoo(value / 100);
+  }, []);
+
+  const persistGoo = useCallback(() => {
+    const value = keepGoo(goo);
+    setKeptGoo(value);
+  }, [goo]);
 
   const pickPattern = useCallback(
     (pattern: LifePattern) => {
@@ -382,6 +407,8 @@ export default function LifeHero() {
         speed={speed}
         speedMin={SPEED_MIN}
         speedMax={SPEED_MAX}
+        goo={goo}
+        keptGoo={keptGoo}
         generation={generation}
         overlayOpen={overlayOpen}
         onTogglePlay={togglePlay}
@@ -389,6 +416,8 @@ export default function LifeHero() {
         onClear={clear}
         onChance={chance}
         onSpeed={changeSpeed}
+        onGoo={changeGoo}
+        onKeepGoo={persistGoo}
         onInspirations={() => setOverlayOpen((open) => !open)}
       />
 
