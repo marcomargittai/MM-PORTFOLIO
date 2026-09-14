@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
     "*.cursor.sh",
     "*.cursor.com",
     "*.cursorusercontent.com",
+    "*.trycloudflare.com",
+    "*.loca.lt",
+    "*.ngrok-free.app",
+    "*.ngrok.io",
   ],
 };
 
