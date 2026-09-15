@@ -127,13 +127,15 @@ export default function LifeHero() {
 
     const onWheel = (event: WheelEvent) => {
       if (overlayRef.current) return;
+      if (!host.contains(event.target as Node)) return;
       event.preventDefault();
       const cam = camRef.current;
       const line = event.deltaMode === 1;
       const page = event.deltaMode === 2;
       const dy = event.deltaY * (line ? 16 : page ? host.clientHeight : 1);
       const dx = event.deltaX * (line ? 16 : page ? host.clientWidth : 1);
-      if (event.ctrlKey) {
+      // Trackpad pinch arrives as ctrl/meta + wheel (Figma, Chrome, Safari).
+      if (event.ctrlKey || event.metaKey) {
         const rect = host.getBoundingClientRect();
         const px = event.clientX - rect.left;
         const py = event.clientY - rect.top;
@@ -154,13 +156,16 @@ export default function LifeHero() {
     };
 
     const blockGesture = (event: Event) => event.preventDefault();
-    host.addEventListener("wheel", onWheel, { passive: false });
-    host.addEventListener("gesturestart", blockGesture, { passive: false });
-    host.addEventListener("gesturechange", blockGesture, { passive: false });
+    const opts: AddEventListenerOptions = { passive: false, capture: true };
+    host.addEventListener("wheel", onWheel, opts);
+    host.addEventListener("gesturestart", blockGesture, opts);
+    host.addEventListener("gesturechange", blockGesture, opts);
+    host.addEventListener("gestureend", blockGesture, opts);
     return () => {
-      host.removeEventListener("wheel", onWheel);
-      host.removeEventListener("gesturestart", blockGesture);
-      host.removeEventListener("gesturechange", blockGesture);
+      host.removeEventListener("wheel", onWheel, opts);
+      host.removeEventListener("gesturestart", blockGesture, opts);
+      host.removeEventListener("gesturechange", blockGesture, opts);
+      host.removeEventListener("gestureend", blockGesture, opts);
     };
   }, []);
 

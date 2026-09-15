@@ -35,6 +35,7 @@ export class LifeLoop {
   private lastTime = 0;
   private running = false;
   private morphing = false;
+  private settleRate = 0;
 
   constructor(options: LifeLoopOptions) {
     this.engine = options.engine;
@@ -43,6 +44,10 @@ export class LifeLoop {
     this.maxDelta = options.maxDelta ?? 0.25;
     this.onFrame = options.onFrame;
     this.previous = new Uint8Array(options.engine.cells);
+  }
+
+  get settling(): boolean {
+    return this.morphing;
   }
 
   setSpeed(generationsPerSecond: number): void {
@@ -58,6 +63,12 @@ export class LifeLoop {
 
   pause(): void {
     this.playing = false;
+    if (Number.isFinite(this.blend) && this.blend < 1 - 1e-4) {
+      this.morphing = true;
+      this.settleRate = this.speed;
+      this.start();
+      return;
+    }
     this.align();
   }
 
@@ -71,6 +82,8 @@ export class LifeLoop {
     this.engine.step();
     this.blend = 0;
     this.morphing = true;
+    this.settleRate = 1 / MANUAL_MORPH;
+    this.start();
   }
 
   align(): void {
@@ -82,6 +95,7 @@ export class LifeLoop {
 
   start(): void {
     if (this.running) return;
+    if (typeof requestAnimationFrame !== "function") return;
     this.running = true;
     this.lastTime = performance.now();
     this.rafId = requestAnimationFrame(this.frame);
@@ -96,6 +110,12 @@ export class LifeLoop {
     }
   }
 
+  /** Advance without RAF. Tests use this; the live loop calls it from `frame`. */
+  tick(dt: number): FrameInfo {
+    const steps = this.applyTime(dt);
+    return this.emit(dt, steps);
+  }
+
   private ensurePrev(): void {
     if (this.previous.length !== this.engine.cells.length) {
       this.previous = new Uint8Array(this.engine.cells);
@@ -107,11 +127,7 @@ export class LifeLoop {
     this.previous.set(this.engine.cells);
   }
 
-  private frame = (time: number): void => {
-    if (!this.running) return;
-    const raw = (time - this.lastTime) / 1000;
-    this.lastTime = time;
-    const dt = raw > this.maxDelta ? this.maxDelta : raw < 0 ? 0 : raw;
+  private applyTime(dt: number): number {
     let steps = 0;
     this.ensurePrev();
 
@@ -131,15 +147,21 @@ export class LifeLoop {
         steps += 1;
       }
     } else if (this.morphing) {
-      this.blend += dt / MANUAL_MORPH;
+      const rate = this.settleRate > 0 ? this.settleRate : this.speed;
+      this.blend += dt * rate;
       if (this.blend >= 1) {
         this.blend = 1;
         this.morphing = false;
+        this.previous.set(this.engine.cells);
       }
     }
 
+    return steps;
+  }
+
+  private emit(dt: number, steps: number): FrameInfo {
     const blend = this.blend < 0 ? 0 : this.blend > 1 ? 1 : this.blend;
-    this.onFrame?.({
+    const info: FrameInfo = {
       dt,
       steps,
       playing: this.playing,
@@ -147,7 +169,18 @@ export class LifeLoop {
       blend,
       previous: this.previous,
       current: this.engine.cells,
-    });
+    };
+    this.onFrame?.(info);
+    return info;
+  }
+
+  private frame = (time: number): void => {
+    if (!this.running) return;
+    const raw = (time - this.lastTime) / 1000;
+    this.lastTime = time;
+    const dt = raw > this.maxDelta ? this.maxDelta : raw < 0 ? 0 : raw;
+    const steps = this.applyTime(dt);
+    this.emit(dt, steps);
     this.rafId = requestAnimationFrame(this.frame);
   };
 }
