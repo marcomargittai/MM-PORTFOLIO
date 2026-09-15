@@ -25,6 +25,7 @@ export const SETTLE_DURATION = 0.42;
 /** Time to grow or shrink a painted cell once the field is still. */
 export const PAINT_MORPH = 0.36;
 const MORPH_DT_CAP = 1 / 24;
+const PLAY_DT_CAP = 1 / 30;
 
 export class LifeLoop {
   readonly engine: LifeEngine;
@@ -42,6 +43,7 @@ export class LifeLoop {
   private morphing = false;
   private settleRate = 0;
   private restStroke = false;
+  private queuedStep = false;
 
   constructor(options: LifeLoopOptions) {
     this.engine = options.engine;
@@ -70,6 +72,7 @@ export class LifeLoop {
 
   pause(): void {
     this.playing = false;
+    this.queuedStep = false;
     this.restStroke = false;
     if (Number.isFinite(this.blend) && this.blend < 1 - 1e-4) {
       this.morphing = true;
@@ -94,6 +97,7 @@ export class LifeLoop {
     this.blend = 0;
     this.morphing = true;
     this.restStroke = false;
+    this.queuedStep = false;
     this.settleRate = 1 / MANUAL_MORPH;
     this.start();
   }
@@ -104,10 +108,12 @@ export class LifeLoop {
     this.blend = 1;
     this.morphing = false;
     this.restStroke = false;
+    this.queuedStep = false;
   }
 
   beginStroke(): void {
     this.playing = false;
+    this.queuedStep = false;
     this.ensurePrev();
     this.restStroke = this.blend >= 1 - 1e-4 && !this.morphing;
     if (!this.restStroke) {
@@ -212,19 +218,18 @@ export class LifeLoop {
     this.ensurePrev();
 
     if (this.playing && this.speed > 0) {
-      this.blend += dt * this.speed;
-      const cap = this.maxStepsPerFrame;
-      while (this.blend >= 1 && steps < cap) {
-        this.snapshot();
-        this.engine.step();
-        this.blend -= 1;
-        steps += 1;
-      }
-      if (steps >= cap && this.blend >= 1) {
+      const playDt = Math.min(dt, PLAY_DT_CAP);
+      if (this.queuedStep) {
         this.snapshot();
         this.engine.step();
         this.blend = 0;
-        steps += 1;
+        this.queuedStep = false;
+        steps = 1;
+      }
+      this.blend += playDt * this.speed;
+      if (this.blend >= 1) {
+        this.blend = 1;
+        this.queuedStep = true;
       }
     } else if (this.morphing) {
       const rate = this.settleRate > 0 ? this.settleRate : 1 / SETTLE_DURATION;

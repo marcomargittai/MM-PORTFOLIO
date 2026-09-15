@@ -82,8 +82,9 @@ float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
   float rLink = (occ.x * occ.y > 0.5 && nocc.x * nocc.y > 0.5)
     ? rad
     : rad * mix(occ.x * nocc.x, occ.y * nocc.y, t);
-  if (rLink < rad * 0.55) return 1e5;
-  return sdCapsule(px, a, cellCenter(nb), rLink);
+  float w = smoothstep(rad * 0.42, rad * 0.78, rLink);
+  if (w < 1e-3) return 1e5;
+  return sdCapsule(px, a, cellCenter(nb), mix(rad * 0.62, rLink, w));
 }
 
 // Orthogonal tubes only. Diagonals at mid-blend draw the wireframe mesh.
@@ -120,7 +121,9 @@ void main() {
   }
 
   vec2 base = floor(gridPos);
-  float t = uBlend * uBlend * (3.0 - 2.0 * uBlend);
+  // Linear in blend so each generation spends equal time. Smoothstep
+  // rushed the middle and made the wrap feel like a skipped frame.
+  float t = uBlend;
   float rad = min(uHalfExtents.x, uHalfExtents.y);
   float k = max(uGooey, 1e-4);
   float lim = min(uCellSize.x, uCellSize.y) * 0.95;
@@ -138,7 +141,11 @@ void main() {
     }
   }
 
-  sd = min(sd, neighborLinks(px, base, t, rad));
+  {
+    float links = neighborLinks(px, base, t, rad);
+    if (links < lim && sd < lim) sd = smin(sd, links, k);
+    else sd = min(sd, links);
+  }
 
   float aa = max(uSoftness, 1.15);
   if (sd > aa * 2.5) {
@@ -498,7 +505,7 @@ export class LifeBlobRenderer {
     const L = this.layout!;
     const w = canvas.width;
     const h = canvas.height;
-    const t = this.blend * this.blend * (3 - 2 * this.blend);
+    const t = this.blend;
     const replicas = this.wrap ? [-1, 0, 1] : [0];
     const rad = Math.min(L.halfDevW, L.halfDevH);
 
@@ -551,8 +558,10 @@ export class LifeBlobRenderer {
             if (dx < 0 || (dx === 0 && dy < 0)) continue;
             const nPrev = bit(previous, c + dx, r + dy);
             const nNext = bit(current, c + dx, r + dy);
-            const rLink = prev && next && nPrev && nNext ? rad : rad * mix(prev * nPrev, next * nNext, t);
-            if (rLink < rad * 0.55) continue;
+            const raw = prev && next && nPrev && nNext ? rad : rad * mix(prev * nPrev, next * nNext, t);
+            const w = raw <= rad * 0.42 ? 0 : raw >= rad * 0.78 ? 1 : (raw - rad * 0.42) / (rad * 0.36);
+            if (w < 0.01) continue;
+            const rLink = rad * 0.62 + (raw - rad * 0.62) * w;
             ctx.lineWidth = rLink * 2;
             ctx.beginPath();
             ctx.moveTo(cx, cy);

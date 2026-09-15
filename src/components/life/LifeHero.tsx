@@ -28,7 +28,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 10;
+const RENDERER_REV = 11;
 const CAM_MIN = 0.35;
 const CAM_MAX = 8;
 
@@ -188,14 +188,17 @@ export default function LifeHero() {
     renderer.init(canvas, { wrap: true, goo: initialGoo / GOO_UNIT });
     renderer.setCamera(camRef.current.x, camRef.current.y, camRef.current.scale);
 
+    let hudAt = 0;
     const loop = new LifeLoop({
       engine,
       speed: DEFAULT_SPEED,
       onFrame: ({ steps, blend, previous, current }) => {
         renderer.render(previous, current, engine.width, engine.height, blend);
         if (steps > 0) {
-          setGeneration(engine.generation);
-          if (engine.generation % 4 === 0) {
+          const now = performance.now();
+          if (now - hudAt > 140) {
+            hudAt = now;
+            setGeneration(engine.generation);
             setPopulation(engine.liveCount());
           }
         }

@@ -78,7 +78,7 @@ function midMorph(speed = 10) {
   loop.play();
   check("play cancels settle", loop.playing && !loop.settling);
   const before = engine.generation;
-  loop.tick(1);
+  flush(loop, 1);
   check("resume after cancel continues stepping", engine.generation > before && engine.generation >= generation);
   loop.stop();
 }
@@ -128,6 +128,47 @@ function midMorph(speed = 10) {
   check("paint mid-morph writes current only", engine.get(0, 0) === 1);
   flush(loop, 1);
   check("paint mid-morph settles without a snap", loop.blend === 1 && engine.get(0, 0) === 1);
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.play();
+  loop.blend = 0.92;
+  const g = engine.generation;
+  loop.tick(1 / 60);
+  check("play holds a completed generation before stepping", loop.blend === 1 && engine.generation === g);
+  loop.tick(1 / 60);
+  check("play takes one step on the following frame", engine.generation === g + 1 && loop.blend < 1);
+  loop.stop();
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 12 });
+  loop.align();
+  loop.play();
+  const g0 = engine.generation;
+  const info = loop.tick(0.25);
+  check("a hitch never takes more than one step", info.steps <= 1);
+  check("a hitch never skips a generation", engine.generation <= g0 + 1);
+  loop.stop();
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 24 });
+  loop.align();
+  loop.play();
+  let maxSteps = 0;
+  for (let i = 0; i < 120; i++) {
+    const info = loop.tick(1 / 60);
+    if (info.steps > maxSteps) maxSteps = info.steps;
+  }
+  check("steady play never double-steps", maxSteps <= 1);
+  check("steady play still advances", engine.generation > 0);
+  loop.stop();
 }
 
 if (failed > 0) {
