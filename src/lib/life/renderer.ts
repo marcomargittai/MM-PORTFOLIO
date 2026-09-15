@@ -74,6 +74,11 @@ float occupancy(vec2 occ, float t) {
   return occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
 }
 
+// Live in both generations — this edge is not appearing or dying.
+bool settled(vec2 occ) {
+  return occ.x * occ.y > 0.5;
+}
+
 float sdRoundBox(vec2 p, vec2 b, float r) {
   r = min(max(r, 0.0), min(b.x, b.y));
   vec2 q = abs(p) - b + r;
@@ -94,15 +99,15 @@ float roundAmount() {
   return uCorner / max(min(uHalfExtents.x, uHalfExtents.y), 1e-4);
 }
 
-// Fat tubes only, and only once both cells are already there.
-// A capsule that grows from 0 is the hairline you see mid-step.
+// Tubes only on edges that survive the step. A dying cell still has
+// occupancy for a while; welding it to a neighbor as it shrinks is the
+// mid-animation hairline.
 float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
   if (uWrap < 0.5 && !inGrid(nb, uGridSize)) return 1e5;
   vec2 nocc = sampleOcc(nb);
-  float both = min(occupancy(occ, t), occupancy(nocc, t));
-  if (both < 0.84) return 1e5;
+  if (!settled(occ) || !settled(nocc)) return 1e5;
   if (roundAmount() < 0.62) return 1e5;
-  return sdCapsule(px, a, cellCenter(nb), rad * both);
+  return sdCapsule(px, a, cellCenter(nb), rad);
 }
 
 float neighborLinks(vec2 px, vec2 gc, float t, float rad) {
@@ -165,17 +170,17 @@ void main() {
       for (int i = -1; i <= 1; i++) {
         vec2 gc = base + vec2(float(i), float(j));
         if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
-        float o0 = occupancy(sampleOcc(gc), t);
+        vec2 occ0 = sampleOcc(gc);
         float d0 = cellField(px, gc, t);
         vec2 nbx = gc + vec2(1.0, 0.0);
         vec2 nby = gc + vec2(0.0, 1.0);
-        float ox = occupancy(sampleOcc(nbx), t);
-        float oy = occupancy(sampleOcc(nby), t);
-        if (min(o0, ox) >= 0.55) {
+        vec2 occx = sampleOcc(nbx);
+        vec2 occy = sampleOcc(nby);
+        if (settled(occ0) && settled(occx)) {
           float dx = cellField(px, nbx, t);
           if (d0 < lim && dx < lim) sd = min(sd, smin(d0, dx, k));
         }
-        if (min(o0, oy) >= 0.55) {
+        if (settled(occ0) && settled(occy)) {
           float dy = cellField(px, nby, t);
           if (d0 < lim && dy < lim) sd = min(sd, smin(d0, dy, k));
         }
@@ -638,14 +643,13 @@ export class LifeBlobRenderer {
           ctx.fill();
           const roundAmt = L.cornerDev / Math.max(Math.min(L.halfDevW, L.halfDevH), 1e-4);
           if (this.pull < 0.08 || roundAmt < 0.62) return;
+          if (!(prev && next)) return;
           for (const [dx, dy] of ORTHO) {
             if (dx < 0 || (dx === 0 && dy < 0)) continue;
             const nPrev = bit(previous, c + dx, r + dy);
             const nNext = bit(current, c + dx, r + dy);
-            const nOcc = nPrev && nNext ? 1 : mix(nPrev, nNext, t);
-            const both = Math.min(occ, nOcc);
-            if (both < 0.84) continue;
-            ctx.lineWidth = rad * both * 2;
+            if (!(nPrev && nNext)) continue;
+            ctx.lineWidth = rad * 2;
             ctx.beginPath();
             ctx.moveTo(cx, cy);
             ctx.lineTo(cx + dx * L.cellDevW, cy + dy * L.cellDevH);
