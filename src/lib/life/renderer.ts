@@ -81,9 +81,9 @@ float cellField(vec2 px, vec2 gc, float t) {
   float o = occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
   if (o < 0.02) return 1e5;
   vec2 p = px - cellCenter(gc);
-  vec2 half = uHalfExtents * o;
-  float box = sdRoundBox(p, half, uCorner * o);
-  float ball = length(p) - min(half.x, half.y);
+  vec2 ext = uHalfExtents * o;
+  float box = sdRoundBox(p, ext, uCorner * o);
+  float ball = length(p) - min(ext.x, ext.y);
   float melt = smoothstep(0.18, 1.2, uGoo);
   return mix(box, ball, melt);
 }
