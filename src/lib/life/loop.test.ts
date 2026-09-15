@@ -1,5 +1,5 @@
 import { buffersEqual, LifeEngine } from "./engine";
-import { LifeLoop } from "./loop";
+import { LifeLoop, PAINT_MORPH, SETTLE_DURATION } from "./loop";
 
 let failed = 0;
 
@@ -18,6 +18,16 @@ function blinker(): LifeEngine {
   engine.set(2, 2, 1);
   engine.set(3, 2, 1);
   return engine;
+}
+
+function flush(loop: LifeLoop, seconds: number) {
+  const step = 1 / 60;
+  let left = seconds;
+  while (left > 0) {
+    const dt = left < step ? left : step;
+    loop.tick(dt);
+    left -= dt;
+  }
 }
 
 function midMorph(speed = 10) {
@@ -40,10 +50,13 @@ function midMorph(speed = 10) {
   check("pause mid-blend does not step", engine.generation === generation);
 
   loop.tick(0.01);
-  check("settle advances at play speed", Math.abs(loop.blend - 0.4) < 1e-9);
+  const afterTick = loop.blend;
+  const expected = 0.3 + (0.7 / SETTLE_DURATION) * 0.01;
+  check("pause eases remaining blend over settle duration", Math.abs(afterTick - expected) < 1e-9);
+  check("pause settle is slower than play speed", afterTick < 0.35);
   check("settle does not step the engine", engine.generation === generation && loop.settling);
 
-  loop.tick(1);
+  flush(loop, 1);
   check("settle lands on blend 1", loop.blend === 1 && !loop.settling);
   check("settle still does not step", engine.generation === generation);
   check("settle copies current into previous", buffersEqual(loop.previous, engine.cells));
@@ -77,7 +90,7 @@ function midMorph(speed = 10) {
   const gen = engine.generation;
   loop.stepOnce();
   check("stepOnce starts a morph", loop.settling && loop.blend === 0 && engine.generation === gen + 1);
-  loop.tick(1);
+  flush(loop, 1);
   check("stepOnce lands aligned", loop.blend === 1 && !loop.settling && buffersEqual(loop.previous, engine.cells));
   loop.stop();
 }
@@ -87,6 +100,34 @@ function midMorph(speed = 10) {
   loop.pause();
   loop.align();
   check("align aborts settle", !loop.settling && loop.blend === 1);
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.beginStroke();
+  loop.stamp(0, 0, 1);
+  check("paint at rest starts a grow morph", loop.settling && loop.blend === 0);
+  check("paint at rest does not snap the rest of the field", loop.previous[engine.index(1, 2)] === 1 && engine.get(1, 2) === 1);
+  check("paint at rest grows from empty", loop.previous[engine.index(0, 0)] === 0 && engine.get(0, 0) === 1);
+  const before = loop.blend;
+  loop.tick(1 / 30);
+  const grew = before + (1 / PAINT_MORPH) * (1 / 30);
+  check("paint grow is timed", Math.abs(loop.blend - grew) < 1e-9);
+  flush(loop, 1);
+  check("paint grow lands aligned", loop.blend === 1 && !loop.settling && engine.get(0, 0) === 1);
+}
+
+{
+  const { engine, loop } = midMorph();
+  const held = loop.blend;
+  loop.beginStroke();
+  loop.stamp(0, 0, 1);
+  check("paint mid-morph does not rewind blend", Math.abs(loop.blend - held) < 1e-9);
+  check("paint mid-morph writes current only", engine.get(0, 0) === 1);
+  flush(loop, 1);
+  check("paint mid-morph settles without a snap", loop.blend === 1 && engine.get(0, 0) === 1);
 }
 
 if (failed > 0) {

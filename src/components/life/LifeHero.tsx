@@ -252,7 +252,7 @@ export default function LifeHero() {
   const pauseForPaint = () => {
     const loop = loopRef.current;
     if (!loop) return;
-    loop.pause();
+    loop.beginStroke();
     playingRef.current = false;
     setPlaying(false);
   };
@@ -278,8 +278,7 @@ export default function LifeHero() {
     paintAliveRef.current = erase ? 0 : 1;
     paintingRef.current = true;
     lastCellRef.current = cell;
-    engine.set(cell.x, cell.y, paintAliveRef.current);
-    loopRef.current?.align();
+    loopRef.current?.stamp(cell.x, cell.y, paintAliveRef.current);
     syncHud();
   };
 
@@ -292,10 +291,9 @@ export default function LifeHero() {
     if (!cell) return;
     const last = lastCellRef.current;
     if (last && last.x === cell.x && last.y === cell.y) return;
-    if (last) engine.paintLine(last.x, last.y, cell.x, cell.y, paintAliveRef.current);
-    else engine.set(cell.x, cell.y, paintAliveRef.current);
+    if (last) loopRef.current?.stampLine(last.x, last.y, cell.x, cell.y, paintAliveRef.current);
+    else loopRef.current?.stamp(cell.x, cell.y, paintAliveRef.current);
     lastCellRef.current = cell;
-    loopRef.current?.align();
     syncHud();
   };
 

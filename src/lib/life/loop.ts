@@ -20,6 +20,11 @@ export interface LifeLoopOptions {
 
 const MIN_SPEED = 0.25;
 const MANUAL_MORPH = 0.34;
+/** Time to ease the rest of a generation after Pause. Long enough to read. */
+export const SETTLE_DURATION = 0.42;
+/** Time to grow or shrink a painted cell once the field is still. */
+export const PAINT_MORPH = 0.36;
+const MORPH_DT_CAP = 1 / 24;
 
 export class LifeLoop {
   readonly engine: LifeEngine;
@@ -36,6 +41,7 @@ export class LifeLoop {
   private running = false;
   private morphing = false;
   private settleRate = 0;
+  private restStroke = false;
 
   constructor(options: LifeLoopOptions) {
     this.engine = options.engine;
@@ -58,18 +64,23 @@ export class LifeLoop {
   play(): void {
     this.playing = true;
     this.morphing = false;
+    this.restStroke = false;
     this.start();
   }
 
   pause(): void {
     this.playing = false;
+    this.restStroke = false;
     if (Number.isFinite(this.blend) && this.blend < 1 - 1e-4) {
       this.morphing = true;
-      this.settleRate = this.speed;
+      this.easeRemaining(SETTLE_DURATION);
       this.start();
       return;
     }
-    this.align();
+    this.ensurePrev();
+    this.previous.set(this.engine.cells);
+    this.blend = 1;
+    this.morphing = false;
   }
 
   togglePlaying(): void {
@@ -82,6 +93,7 @@ export class LifeLoop {
     this.engine.step();
     this.blend = 0;
     this.morphing = true;
+    this.restStroke = false;
     this.settleRate = 1 / MANUAL_MORPH;
     this.start();
   }
@@ -91,6 +103,69 @@ export class LifeLoop {
     this.previous.set(this.engine.cells);
     this.blend = 1;
     this.morphing = false;
+    this.restStroke = false;
+  }
+
+  beginStroke(): void {
+    this.playing = false;
+    this.ensurePrev();
+    this.restStroke = this.blend >= 1 - 1e-4 && !this.morphing;
+    if (!this.restStroke) {
+      this.morphing = true;
+      this.easeRemaining(SETTLE_DURATION);
+    }
+    this.start();
+  }
+
+  stamp(x: number, y: number, value: 0 | 1): void {
+    this.ensurePrev();
+    this.playing = false;
+    const i = this.engine.index(x, y);
+
+    if (this.restStroke || (this.blend >= 1 - 1e-4 && !this.morphing)) {
+      if (!this.morphing || this.blend >= 1 - 1e-4) {
+        this.previous.set(this.engine.cells);
+        this.blend = 0;
+        this.easeRemaining(PAINT_MORPH);
+        this.restStroke = true;
+      }
+      this.engine.cells[i] = value;
+      this.morphing = true;
+      this.start();
+      return;
+    }
+
+    this.engine.cells[i] = value;
+    this.morphing = true;
+    if (this.settleRate <= 0) this.easeRemaining(SETTLE_DURATION);
+    this.start();
+  }
+
+  stampLine(x0: number, y0: number, x1: number, y1: number, value: 0 | 1): void {
+    x0 |= 0;
+    y0 |= 0;
+    x1 |= 0;
+    y1 |= 0;
+    const dx = Math.abs(x1 - x0);
+    const sx = x0 < x1 ? 1 : -1;
+    const dy = -Math.abs(y1 - y0);
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx + dy;
+    let x = x0;
+    let y = y0;
+    for (;;) {
+      this.stamp(x, y, value);
+      if (x === x1 && y === y1) break;
+      const e2 = err << 1;
+      if (e2 >= dy) {
+        err += dy;
+        x += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y += sy;
+      }
+    }
   }
 
   start(): void {
@@ -127,6 +202,11 @@ export class LifeLoop {
     this.previous.set(this.engine.cells);
   }
 
+  private easeRemaining(duration: number): void {
+    const remaining = Math.max(1 - this.blend, 1e-4);
+    this.settleRate = remaining / Math.max(duration, 1e-3);
+  }
+
   private applyTime(dt: number): number {
     let steps = 0;
     this.ensurePrev();
@@ -147,11 +227,12 @@ export class LifeLoop {
         steps += 1;
       }
     } else if (this.morphing) {
-      const rate = this.settleRate > 0 ? this.settleRate : this.speed;
-      this.blend += dt * rate;
+      const rate = this.settleRate > 0 ? this.settleRate : 1 / SETTLE_DURATION;
+      this.blend += Math.min(dt, MORPH_DT_CAP) * rate;
       if (this.blend >= 1) {
         this.blend = 1;
         this.morphing = false;
+        this.restStroke = false;
         this.previous.set(this.engine.cells);
       }
     }
