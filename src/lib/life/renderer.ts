@@ -83,7 +83,10 @@ float cellField(vec2 px, vec2 gc, float t) {
   float o = occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
   if (o < 0.02) return 1e5;
   vec2 p = px - cellCenter(gc);
-  vec2 ext = uHalfExtents * o;
+  vec2 cellExt = uHalfExtents * o;
+  float rad = min(cellExt.x, cellExt.y);
+  float round = clamp(uCorner / max(min(uHalfExtents.x, uHalfExtents.y), 1e-4), 0.0, 1.0);
+  vec2 ext = mix(cellExt, vec2(rad), round);
   return sdRoundBox(p, ext, uCorner * o);
 }
 
