@@ -6,7 +6,18 @@ import { LifeEngine } from "@/lib/life/engine";
 import { LifeLoop } from "@/lib/life/loop";
 import { findPattern, type LifePattern } from "@/lib/life/patterns";
 import { patternCells } from "@/lib/life/patterns";
-import { DEFAULT_GOO, GOO_UNIT, keepGoo, readGoo, readKeptGoo, writeGoo } from "@/lib/life/prefs";
+import {
+  DEFAULT_GOO,
+  DEFAULT_PULL,
+  GOO_UNIT,
+  PULL_UNIT,
+  keepGoo,
+  readGoo,
+  readKeptGoo,
+  readPull,
+  writeGoo,
+  writePull,
+} from "@/lib/life/prefs";
 import { LifeBlobRenderer } from "@/lib/life/renderer";
 import { InspirationsOverlay } from "./InspirationsOverlay";
 import { LifeChrome } from "./LifeChrome";
@@ -28,7 +39,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 14;
+const RENDERER_REV = 15;
 const CAM_MIN = 0.35;
 const CAM_MAX = 8;
 
@@ -88,6 +99,7 @@ export default function LifeHero() {
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(DEFAULT_SPEED);
   const [goo, setGoo] = useState(DEFAULT_GOO);
+  const [pull, setPull] = useState(DEFAULT_PULL);
   const [keptGoo, setKeptGoo] = useState<number | null>(null);
   const [population, setPopulation] = useState(1);
   const [generation, setGeneration] = useState(0);
@@ -180,12 +192,18 @@ export default function LifeHero() {
     );
 
     const initialGoo = readGoo();
+    const initialPull = readPull();
     setGoo(initialGoo);
+    setPull(initialPull);
     setKeptGoo(readKeptGoo());
 
     const engine = new LifeEngine(cols, rows);
     const renderer = new LifeBlobRenderer();
-    renderer.init(canvas, { wrap: true, goo: initialGoo / GOO_UNIT });
+    renderer.init(canvas, {
+      wrap: true,
+      goo: initialGoo / GOO_UNIT,
+      pull: initialPull / PULL_UNIT,
+    });
     renderer.setCamera(camRef.current.x, camRef.current.y, camRef.current.scale);
 
     let hudAt = 0;
@@ -361,6 +379,12 @@ export default function LifeHero() {
     setKeptGoo(value);
   }, [goo]);
 
+  const changePull = useCallback((next: number) => {
+    const value = writePull(next);
+    setPull(value);
+    rendererRef.current?.setPull(value / PULL_UNIT);
+  }, []);
+
   const pickPattern = useCallback(
     (pattern: LifePattern) => {
       applyPattern(pattern, true);
@@ -466,6 +490,7 @@ export default function LifeHero() {
         speedMin={SPEED_MIN}
         speedMax={SPEED_MAX}
         goo={goo}
+        pull={pull}
         keptGoo={keptGoo}
         generation={generation}
         overlayOpen={overlayOpen}
@@ -475,6 +500,7 @@ export default function LifeHero() {
         onChance={chance}
         onSpeed={changeSpeed}
         onGoo={changeGoo}
+        onPull={changePull}
         onKeepGoo={persistGoo}
         onInspirations={() => setOverlayOpen((open) => !open)}
       />

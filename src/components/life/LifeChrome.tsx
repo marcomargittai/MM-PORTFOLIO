@@ -1,6 +1,6 @@
 "use client";
 
-import { GOO_MAX, GOO_MIN } from "@/lib/life/prefs";
+import { GOO_MAX, GOO_MIN, PULL_MAX, PULL_MIN } from "@/lib/life/prefs";
 import { HairlineSlider } from "./HairlineSlider";
 
 type LifeChromeProps = {
@@ -11,6 +11,7 @@ type LifeChromeProps = {
   speedMin: number;
   speedMax: number;
   goo: number;
+  pull: number;
   keptGoo: number | null;
   generation: number;
   overlayOpen: boolean;
@@ -20,6 +21,7 @@ type LifeChromeProps = {
   onChance: () => void;
   onSpeed: (value: number) => void;
   onGoo: (value: number) => void;
+  onPull: (value: number) => void;
   onKeepGoo: () => void;
   onInspirations: () => void;
 };
@@ -39,6 +41,7 @@ export function LifeChrome({
   speedMin,
   speedMax,
   goo,
+  pull,
   keptGoo,
   generation,
   overlayOpen,
@@ -48,6 +51,7 @@ export function LifeChrome({
   onChance,
   onSpeed,
   onGoo,
+  onPull,
   onKeepGoo,
   onInspirations,
 }: LifeChromeProps) {
@@ -112,6 +116,14 @@ export function LifeChrome({
               max={GOO_MAX}
               display={String(goo)}
               onChange={onGoo}
+            />
+            <HairlineSlider
+              label="Pull"
+              value={pull}
+              min={PULL_MIN}
+              max={PULL_MAX}
+              display={String(pull)}
+              onChange={onPull}
             />
             <div className="flex items-baseline justify-between text-[10px] uppercase tracking-[0.22em]">
               <button type="button" className={word} onClick={onKeepGoo}>
