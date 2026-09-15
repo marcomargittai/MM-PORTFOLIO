@@ -70,24 +70,24 @@ vec2 cellCenter(vec2 gc) {
   return uOrigin + (gc + 0.5) * uCellSize;
 }
 
-float sdRoundBox(vec2 p, vec2 b, float r) {
-  r = min(max(r, 0.0), min(b.x, b.y));
-  vec2 q = abs(p) - b + r;
-  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+float sdBox(vec2 p, vec2 b) {
+  vec2 d = abs(p) - b;
+  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
 }
 
-// One tile. Goo is only the corner radius — at max it is a circle,
-// so no square remains sitting under the liquid.
+// Goo off: the tile. Goo on: a disk. Never a rounded rectangle —
+// that is a square with fillets, and the four corners stay visible
+// as star pinches at every joint.
 float cellField(vec2 px, vec2 gc, float t) {
   vec2 occ = sampleOcc(gc);
   float o = occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
   if (o < 0.02) return 1e5;
   vec2 p = px - cellCenter(gc);
-  vec2 cellExt = uHalfExtents * o;
-  float rad = min(cellExt.x, cellExt.y);
-  float round = clamp(uCorner / max(min(uHalfExtents.x, uHalfExtents.y), 1e-4), 0.0, 1.0);
-  vec2 ext = mix(cellExt, vec2(rad), round);
-  return sdRoundBox(p, ext, uCorner * o);
+  vec2 ext = uHalfExtents * o;
+  float rad = min(ext.x, ext.y);
+  float g = uCorner / max(min(uHalfExtents.x, uHalfExtents.y), 1e-4);
+  if (g < 0.04) return sdBox(p, ext);
+  return length(p) - rad;
 }
 
 float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
@@ -96,9 +96,8 @@ float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
   float rLink = (occ.x * occ.y > 0.5 && nocc.x * nocc.y > 0.5)
     ? rad
     : rad * mix(occ.x * nocc.x, occ.y * nocc.y, t);
-  float w = smoothstep(rad * 0.42, rad * 0.78, rLink);
-  if (w < 1e-3) return 1e5;
-  return sdCapsule(px, a, cellCenter(nb), mix(rad * 0.62, rLink, w));
+  if (rLink < rad * 0.08) return 1e5;
+  return sdCapsule(px, a, cellCenter(nb), rLink);
 }
 
 // Orthogonal tubes only. Diagonals at mid-blend draw the wireframe mesh.
@@ -142,6 +141,7 @@ void main() {
   float pull = smoothstep(0.03, 0.4, uPull);
   float lim = min(uCellSize.x, uCellSize.y) * 0.95;
   float sd = 1e5;
+  float links = 1e5;
 
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
@@ -152,11 +152,11 @@ void main() {
       float d = cellField(px, gc, t) - pointerBulge(px, o);
       if (pull > 0.02 && d < lim && sd < lim) sd = smin(sd, d, k);
       else sd = min(sd, d);
+      if (pull > 0.04) links = min(links, neighborLinks(px, gc, t, rad));
     }
   }
 
   if (pull > 0.04) {
-    float links = neighborLinks(px, base, t, rad);
     if (links < lim && sd < lim) sd = smin(sd, links, k);
     else sd = min(sd, links);
   }
@@ -603,10 +603,10 @@ export class LifeBlobRenderer {
         eachReplica(c, r, (cx, cy) => {
           const hw = L.halfDevW * occ;
           const hh = L.halfDevH * occ;
-          const cr = L.cornerDev * occ;
+          const g = L.cornerDev / Math.max(Math.min(L.halfDevW, L.halfDevH), 1e-4);
           ctx.beginPath();
-          if (typeof ctx.roundRect === "function") {
-            ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, cr);
+          if (g < 0.04) {
+            ctx.rect(cx - hw, cy - hh, hw * 2, hh * 2);
           } else {
             ctx.arc(cx, cy, Math.min(hw, hh), 0, Math.PI * 2);
           }
@@ -616,10 +616,8 @@ export class LifeBlobRenderer {
             if (dx < 0 || (dx === 0 && dy < 0)) continue;
             const nPrev = bit(previous, c + dx, r + dy);
             const nNext = bit(current, c + dx, r + dy);
-            const raw = prev && next && nPrev && nNext ? rad : rad * mix(prev * nPrev, next * nNext, t);
-            const w = raw <= rad * 0.42 ? 0 : raw >= rad * 0.78 ? 1 : (raw - rad * 0.42) / (rad * 0.36);
-            if (w < 0.01) continue;
-            const rLink = rad * 0.62 + (raw - rad * 0.62) * w;
+            const rLink = prev && next && nPrev && nNext ? rad : rad * mix(prev * nPrev, next * nNext, t);
+            if (rLink < rad * 0.08) continue;
             ctx.lineWidth = rLink * 2;
             ctx.beginPath();
             ctx.moveTo(cx, cy);
@@ -649,12 +647,14 @@ export class LifeBlobRenderer {
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
     const p = this.pull;
-    const round = Math.min(1, g / 2.55);
+    // Full disk by ~50 on the Goo slider — past that Goo only stays wet.
+    // A slow ramp left a rounded-rect (square + fillets) sitting under the melt.
+    const round = Math.min(1, g / 0.5);
     const blobScale = 0.5 + p * 0.075;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
     const maxCorner = Math.min(halfCssW, halfCssH);
-    const cornerCss = 0.4 + round * (maxCorner - 0.4);
+    const cornerCss = round * maxCorner;
     const gooeyCss = minCell * (0.01 + p * 0.58);
 
     return {

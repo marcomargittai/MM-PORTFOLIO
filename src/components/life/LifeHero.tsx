@@ -11,6 +11,8 @@ import {
   DEFAULT_PULL,
   GOO_UNIT,
   PULL_UNIT,
+  clampGoo,
+  clampPull,
   keepGoo,
   readGoo,
   readKeptGoo,
@@ -39,7 +41,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 16;
+const RENDERER_REV = 17;
 const CAM_MIN = 0.35;
 const CAM_MAX = 8;
 
@@ -81,6 +83,33 @@ function stampCentered(engine: LifeEngine, pattern: LifePattern) {
   const origin = offsetFor(decoded.width, decoded.height, engine.width, engine.height, isGun(pattern));
   engine.clear();
   engine.stampPattern(decoded.cells, origin.x, origin.y);
+}
+
+function query(): URLSearchParams | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search);
+}
+
+function bootPattern(): LifePattern | undefined {
+  const q = query();
+  return findPattern(q?.get("p") || DEFAULT_PATTERN) ?? findPattern(DEFAULT_PATTERN);
+}
+
+function bootGoo(): number {
+  const raw = query()?.get("goo");
+  if (raw != null) return clampGoo(Number(raw));
+  return readGoo();
+}
+
+function bootPull(): number {
+  const raw = query()?.get("pull");
+  if (raw != null) return clampPull(Number(raw));
+  return readPull();
+}
+
+function bootPlaying(): boolean {
+  const raw = query()?.get("play");
+  return raw !== "0" && raw !== "off";
 }
 
 export default function LifeHero() {
@@ -191,8 +220,9 @@ export default function LifeHero() {
       Math.max(1, canvas.clientHeight || host.clientHeight || window.innerHeight),
     );
 
-    const initialGoo = readGoo();
-    const initialPull = readPull();
+    const initialGoo = bootGoo();
+    const initialPull = bootPull();
+    const shouldPlay = bootPlaying();
     setGoo(initialGoo);
     setPull(initialPull);
     setKeptGoo(readKeptGoo());
@@ -227,14 +257,20 @@ export default function LifeHero() {
     rendererRef.current = renderer;
     loopRef.current = loop;
 
-    const pattern = findPattern(DEFAULT_PATTERN);
+    const pattern = bootPattern();
     if (pattern) stampCentered(engine, pattern);
     loop.align();
 
     loop.start();
-    loop.play();
-    playingRef.current = true;
-    setPlaying(true);
+    if (shouldPlay) {
+      loop.play();
+      playingRef.current = true;
+      setPlaying(true);
+    } else {
+      loop.pause();
+      playingRef.current = false;
+      setPlaying(false);
+    }
     setPopulation(engine.liveCount());
     setGeneration(0);
 
