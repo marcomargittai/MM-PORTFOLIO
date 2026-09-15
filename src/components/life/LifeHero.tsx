@@ -41,7 +41,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 17;
+const RENDERER_REV = 18;
 const CAM_MIN = 0.35;
 const CAM_MAX = 8;
 
@@ -110,6 +110,14 @@ function bootPull(): number {
 function bootPlaying(): boolean {
   const raw = query()?.get("play");
   return raw !== "0" && raw !== "off";
+}
+
+function bootBlend(): number | null {
+  const raw = query()?.get("blend");
+  if (raw == null) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
 export default function LifeHero() {
@@ -259,10 +267,21 @@ export default function LifeHero() {
 
     const pattern = bootPattern();
     if (pattern) stampCentered(engine, pattern);
-    loop.align();
+    const forcedBlend = bootBlend();
+    if (forcedBlend != null) {
+      loop.align();
+      loop.previous.set(engine.cells);
+      engine.step();
+      loop.blend = forcedBlend;
+    } else {
+      loop.align();
+    }
 
     loop.start();
-    if (shouldPlay) {
+    if (forcedBlend != null) {
+      playingRef.current = false;
+      setPlaying(false);
+    } else if (shouldPlay) {
       loop.play();
       playingRef.current = true;
       setPlaying(true);

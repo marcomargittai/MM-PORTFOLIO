@@ -70,37 +70,41 @@ vec2 cellCenter(vec2 gc) {
   return uOrigin + (gc + 0.5) * uCellSize;
 }
 
-float sdBox(vec2 p, vec2 b) {
-  vec2 d = abs(p) - b;
-  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+float occupancy(vec2 occ, float t) {
+  return occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
 }
 
-// Goo off: the tile. Goo on: a disk. Never a rounded rectangle —
-// that is a square with fillets, and the four corners stay visible
-// as star pinches at every joint.
+float sdRoundBox(vec2 p, vec2 b, float r) {
+  r = min(max(r, 0.0), min(b.x, b.y));
+  vec2 q = abs(p) - b + r;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// Goo is corner radius — 0 is a tile, max is a disk. One field, not a
+// square sitting under a circle.
 float cellField(vec2 px, vec2 gc, float t) {
   vec2 occ = sampleOcc(gc);
-  float o = occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
+  float o = occupancy(occ, t);
   if (o < 0.02) return 1e5;
   vec2 p = px - cellCenter(gc);
-  vec2 ext = uHalfExtents * o;
-  float rad = min(ext.x, ext.y);
-  float g = uCorner / max(min(uHalfExtents.x, uHalfExtents.y), 1e-4);
-  if (g < 0.04) return sdBox(p, ext);
-  return length(p) - rad;
+  return sdRoundBox(p, uHalfExtents * o, uCorner * o);
 }
 
+float roundAmount() {
+  return uCorner / max(min(uHalfExtents.x, uHalfExtents.y), 1e-4);
+}
+
+// Fat tubes only, and only once both cells are already there.
+// A capsule that grows from 0 is the hairline you see mid-step.
 float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
   if (uWrap < 0.5 && !inGrid(nb, uGridSize)) return 1e5;
   vec2 nocc = sampleOcc(nb);
-  float rLink = (occ.x * occ.y > 0.5 && nocc.x * nocc.y > 0.5)
-    ? rad
-    : rad * mix(occ.x * nocc.x, occ.y * nocc.y, t);
-  if (rLink < rad * 0.08) return 1e5;
-  return sdCapsule(px, a, cellCenter(nb), rLink);
+  float both = min(occupancy(occ, t), occupancy(nocc, t));
+  if (both < 0.84) return 1e5;
+  if (roundAmount() < 0.62) return 1e5;
+  return sdCapsule(px, a, cellCenter(nb), rad * both);
 }
 
-// Orthogonal tubes only. Diagonals at mid-blend draw the wireframe mesh.
 float neighborLinks(vec2 px, vec2 gc, float t, float rad) {
   vec2 occ = sampleOcc(gc);
   vec2 a = cellCenter(gc);
@@ -137,35 +141,54 @@ void main() {
   // Ease-out so the last of a generation settles instead of snapping.
   float t = 1.0 - pow(1.0 - uBlend, 3.0);
   float rad = min(uHalfExtents.x, uHalfExtents.y);
-  float k = max(uGooey, 1e-4);
+  float minCell = min(uCellSize.x, uCellSize.y);
+  float k = min(max(uGooey, 1e-4), minCell * 0.28);
   float pull = smoothstep(0.03, 0.4, uPull);
-  float lim = min(uCellSize.x, uCellSize.y) * 0.95;
+  float lim = minCell * 0.95;
   float sd = 1e5;
-  float links = 1e5;
 
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
       vec2 gc = base + vec2(float(i), float(j));
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
       vec2 occ = sampleOcc(gc);
-      float o = mix(occ.x, occ.y, t);
-      float d = cellField(px, gc, t) - pointerBulge(px, o);
-      if (pull > 0.02 && d < lim && sd < lim) sd = smin(sd, d, k);
-      else sd = min(sd, d);
-      if (pull > 0.04) links = min(links, neighborLinks(px, gc, t, rad));
+      float o = occupancy(occ, t);
+      sd = min(sd, cellField(px, gc, t) - pointerBulge(px, o));
     }
   }
 
+  // Melt and tubes only along orthogonal edges, and only once both
+  // cells are mostly there. A 3×3 smin bridges diagonals mid-step
+  // and reads as connecting lines.
   if (pull > 0.04) {
-    if (links < lim && sd < lim) sd = smin(sd, links, k);
-    else sd = min(sd, links);
+    for (int j = -1; j <= 1; j++) {
+      for (int i = -1; i <= 1; i++) {
+        vec2 gc = base + vec2(float(i), float(j));
+        if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
+        float o0 = occupancy(sampleOcc(gc), t);
+        float d0 = cellField(px, gc, t);
+        vec2 nbx = gc + vec2(1.0, 0.0);
+        vec2 nby = gc + vec2(0.0, 1.0);
+        float ox = occupancy(sampleOcc(nbx), t);
+        float oy = occupancy(sampleOcc(nby), t);
+        if (min(o0, ox) >= 0.55) {
+          float dx = cellField(px, nbx, t);
+          if (d0 < lim && dx < lim) sd = min(sd, smin(d0, dx, k));
+        }
+        if (min(o0, oy) >= 0.55) {
+          float dy = cellField(px, nby, t);
+          if (d0 < lim && dy < lim) sd = min(sd, smin(d0, dy, k));
+        }
+        float links = neighborLinks(px, gc, t, rad);
+        if (links < lim) sd = min(sd, links);
+      }
+    }
   }
 
   float aa = max(uSoftness, 1.15);
   float liquid = 1.0 - smoothstep(-aa, aa, sd);
 
   // Lattice site at every cell center — the places a dot can land.
-  float minCell = min(uCellSize.x, uCellSize.y);
   float dotR = clamp(minCell * 0.03, 1.15, 2.25);
   float lattice = 0.0;
   for (int j = -1; j <= 1; j++) {
@@ -603,22 +626,26 @@ export class LifeBlobRenderer {
         eachReplica(c, r, (cx, cy) => {
           const hw = L.halfDevW * occ;
           const hh = L.halfDevH * occ;
-          const g = L.cornerDev / Math.max(Math.min(L.halfDevW, L.halfDevH), 1e-4);
+          const cr = Math.min(L.cornerDev * occ, Math.min(hw, hh));
           ctx.beginPath();
-          if (g < 0.04) {
+          if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, cr);
+          } else if (cr < 0.5) {
             ctx.rect(cx - hw, cy - hh, hw * 2, hh * 2);
           } else {
             ctx.arc(cx, cy, Math.min(hw, hh), 0, Math.PI * 2);
           }
           ctx.fill();
-          if (this.pull < 0.08) return;
+          const roundAmt = L.cornerDev / Math.max(Math.min(L.halfDevW, L.halfDevH), 1e-4);
+          if (this.pull < 0.08 || roundAmt < 0.62) return;
           for (const [dx, dy] of ORTHO) {
             if (dx < 0 || (dx === 0 && dy < 0)) continue;
             const nPrev = bit(previous, c + dx, r + dy);
             const nNext = bit(current, c + dx, r + dy);
-            const rLink = prev && next && nPrev && nNext ? rad : rad * mix(prev * nPrev, next * nNext, t);
-            if (rLink < rad * 0.08) continue;
-            ctx.lineWidth = rLink * 2;
+            const nOcc = nPrev && nNext ? 1 : mix(nPrev, nNext, t);
+            const both = Math.min(occ, nOcc);
+            if (both < 0.84) continue;
+            ctx.lineWidth = rad * both * 2;
             ctx.beginPath();
             ctx.moveTo(cx, cy);
             ctx.lineTo(cx + dx * L.cellDevW, cy + dy * L.cellDevH);
@@ -647,9 +674,7 @@ export class LifeBlobRenderer {
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
     const p = this.pull;
-    // Full disk by ~50 on the Goo slider — past that Goo only stays wet.
-    // A slow ramp left a rounded-rect (square + fillets) sitting under the melt.
-    const round = Math.min(1, g / 0.5);
+    const round = Math.min(1, g / GOO_INTENSITY_MAX);
     const blobScale = 0.5 + p * 0.075;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
