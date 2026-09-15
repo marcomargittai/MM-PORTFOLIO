@@ -28,7 +28,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 6;
+const RENDERER_REV = 7;
 
 function cellPx(): number {
   if (typeof window === "undefined") return 22;
@@ -212,12 +212,20 @@ export default function LifeHero() {
     setPlaying(false);
   };
 
+  const feedPointer = (clientX: number, clientY: number) => {
+    const host = hostRef.current;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    rendererRef.current?.setPointer(clientX - rect.left, clientY - rect.top);
+  };
+
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button === 1) return;
     const engine = engineRef.current;
     if (!engine) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    feedPointer(event.clientX, event.clientY);
     pauseForPaint();
     const cell = hit(event.clientX, event.clientY);
     if (!cell) return;
@@ -231,6 +239,7 @@ export default function LifeHero() {
   };
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    feedPointer(event.clientX, event.clientY);
     if (!paintingRef.current) return;
     const engine = engineRef.current;
     if (!engine) return;
@@ -399,6 +408,7 @@ export default function LifeHero() {
         onPointerMove={onPointerMove}
         onPointerUp={endPaint}
         onPointerCancel={endPaint}
+        onPointerLeave={() => rendererRef.current?.clearPointer()}
         onContextMenu={(event) => event.preventDefault()}
       />
 
