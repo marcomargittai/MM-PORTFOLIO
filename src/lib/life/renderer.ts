@@ -148,11 +148,22 @@ void main() {
   }
 
   float aa = max(uSoftness, 1.15);
-  if (sd > aa * 2.5) {
-    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
-    return;
+  float liquid = 1.0 - smoothstep(-aa, aa, sd);
+
+  // Lattice site at every cell center — the places a dot can land.
+  float minCell = min(uCellSize.x, uCellSize.y);
+  float dotR = clamp(minCell * 0.03, 1.15, 2.25);
+  float lattice = 0.0;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 gc = base + vec2(float(i), float(j));
+      if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
+      float d = length(px - cellCenter(gc));
+      lattice = max(lattice, 1.0 - smoothstep(dotR * 0.35, dotR, d));
+    }
   }
-  float a = 1.0 - smoothstep(-aa, aa, sd);
+
+  float a = max(liquid, lattice);
   fragColor = vec4(vec3(a), 1.0);
 }`;
 
@@ -512,11 +523,6 @@ export class LifeBlobRenderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = "#fff";
-    ctx.strokeStyle = "#fff";
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = rad * 2;
 
     const bit = (grid: Uint8Array | Uint8ClampedArray, c: number, r: number) => {
       let x = c;
@@ -541,6 +547,23 @@ export class LifeBlobRenderer {
         }
       }
     };
+
+    const dotR = Math.min(2.25, Math.max(1.15, Math.min(L.cellDevW, L.cellDevH) * 0.03));
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        eachReplica(c, r, (cx, cy) => {
+          ctx.moveTo(cx + dotR, cy);
+          ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+        });
+      }
+    }
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = rad * 2;
 
     for (let r = 0; r < rows; r++) {
       const rowOff = r * cols;
