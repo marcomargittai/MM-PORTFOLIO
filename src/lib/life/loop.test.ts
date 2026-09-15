@@ -135,12 +135,12 @@ function midMorph(speed = 10) {
   const loop = new LifeLoop({ engine, speed: 10 });
   loop.align();
   loop.play();
-  loop.blend = 0.92;
+  loop.blend = 0.995;
   const g = engine.generation;
   loop.tick(1 / 60);
   check("play holds a completed generation before stepping", loop.blend === 1 && engine.generation === g);
   loop.tick(1 / 60);
-  check("play takes one step on the following frame", engine.generation === g + 1 && loop.blend < 1);
+  check("play takes one step on the following frame", engine.generation === g + 1 && loop.blend === 0);
   loop.stop();
 }
 

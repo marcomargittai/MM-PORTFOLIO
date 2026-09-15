@@ -225,8 +225,13 @@ export class LifeLoop {
         this.blend = 0;
         this.queuedStep = false;
         steps = 1;
+        // Stay on the handed-off frame. Adding blend here skipped the
+        // first frames of the next morph and read as a snap.
+        return steps;
       }
-      this.blend += playDt * this.speed;
+      let inc = playDt * this.speed;
+      if (this.blend > 0.78) inc *= 0.42;
+      this.blend += inc;
       if (this.blend >= 1) {
         this.blend = 1;
         this.queuedStep = true;

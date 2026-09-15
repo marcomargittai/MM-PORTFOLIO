@@ -2,8 +2,8 @@ export const GOO_STORAGE_KEY = "mm-life-goo";
 export const GOO_KEPT_KEY = "mm-life-goo-kept";
 
 export const GOO_MIN = 0;
-export const GOO_MAX = 180;
-export const DEFAULT_GOO = 22;
+export const GOO_MAX = 300;
+export const DEFAULT_GOO = 6;
 
 /** Slider units → renderer intensity. 100 is a full melt; the slider goes past it. */
 export const GOO_UNIT = 100;

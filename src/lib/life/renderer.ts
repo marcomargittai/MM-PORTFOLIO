@@ -25,6 +25,8 @@ uniform vec2 uOrigin;
 uniform vec2 uResolution;
 uniform vec2 uHalfExtents;
 uniform float uGooey;
+uniform float uGoo;
+uniform float uCorner;
 uniform float uSoftness;
 uniform float uWrap;
 uniform float uBlend;
@@ -66,14 +68,24 @@ vec2 cellCenter(vec2 gc) {
   return uOrigin + (gc + 0.5) * uCellSize;
 }
 
-// One occupancy, one language: circle + capsules. Paint/align and play
-// both use this. Pairwise products so a dying cell never links to a
-// birth that never shared a generation.
-float cellField(vec2 px, vec2 gc, float t, float rad) {
+float sdRoundBox(vec2 p, vec2 b, float r) {
+  r = min(max(r, 0.0), min(b.x, b.y));
+  vec2 q = abs(p) - b + r;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// One shape, driven by goo: sharp tile → rounded tile → circle.
+// Never union a box on top of a blob — that was the square overlay.
+float cellField(vec2 px, vec2 gc, float t) {
   vec2 occ = sampleOcc(gc);
   float o = occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
   if (o < 0.02) return 1e5;
-  return length(px - cellCenter(gc)) - rad * o;
+  vec2 p = px - cellCenter(gc);
+  vec2 half = uHalfExtents * o;
+  float box = sdRoundBox(p, half, uCorner * o);
+  float ball = length(p) - min(half.x, half.y);
+  float melt = smoothstep(0.18, 1.2, uGoo);
+  return mix(box, ball, melt);
 }
 
 float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
@@ -126,6 +138,7 @@ void main() {
   float t = uBlend;
   float rad = min(uHalfExtents.x, uHalfExtents.y);
   float k = max(uGooey, 1e-4);
+  float melt = smoothstep(0.18, 1.2, uGoo);
   float lim = min(uCellSize.x, uCellSize.y) * 0.95;
   float sd = 1e5;
 
@@ -135,15 +148,15 @@ void main() {
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
       vec2 occ = sampleOcc(gc);
       float o = mix(occ.x, occ.y, t);
-      float d = cellField(px, gc, t, rad) - pointerBulge(px, o);
-      if (d < lim && sd < lim) sd = smin(sd, d, k);
+      float d = cellField(px, gc, t) - pointerBulge(px, o);
+      if (melt > 0.04 && d < lim && sd < lim) sd = smin(sd, d, k);
       else sd = min(sd, d);
     }
   }
 
-  {
+  if (melt > 0.08) {
     float links = neighborLinks(px, base, t, rad);
-    if (links < lim && sd < lim) sd = smin(sd, links, k);
+    if (links < lim && sd < lim) sd = smin(sd, links, k * melt);
     else sd = min(sd, links);
   }
 
@@ -196,6 +209,8 @@ type GlUniforms = {
   uResolution: WebGLUniformLocation;
   uHalfExtents: WebGLUniformLocation;
   uGooey: WebGLUniformLocation;
+  uGoo: WebGLUniformLocation;
+  uCorner: WebGLUniformLocation;
   uSoftness: WebGLUniformLocation;
   uWrap: WebGLUniformLocation;
   uBlend: WebGLUniformLocation;
@@ -441,6 +456,8 @@ export class LifeBlobRenderer {
       uResolution: loc("uResolution"),
       uHalfExtents: loc("uHalfExtents"),
       uGooey: loc("uGooey"),
+      uGoo: loc("uGoo"),
+      uCorner: loc("uCorner"),
       uSoftness: loc("uSoftness"),
       uWrap: loc("uWrap"),
       uBlend: loc("uBlend"),
@@ -493,6 +510,8 @@ export class LifeBlobRenderer {
     gl.uniform2f(u.uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform2f(u.uHalfExtents, L.halfDevW, L.halfDevH);
     gl.uniform1f(u.uGooey, L.gooeyDev);
+    gl.uniform1f(u.uGoo, this.goo);
+    gl.uniform1f(u.uCorner, L.cornerDev);
     gl.uniform1f(u.uSoftness, L.softDev);
     gl.uniform1f(u.uWrap, this.wrap ? 1 : 0);
     gl.uniform1f(u.uBlend, this.blend);
@@ -574,9 +593,18 @@ export class LifeBlobRenderer {
         if (occ < 0.02) continue;
 
         eachReplica(c, r, (cx, cy) => {
+          const hw = L.halfDevW * occ;
+          const hh = L.halfDevH * occ;
+          const cr = L.cornerDev * occ;
+          const melt = Math.min(1, this.goo / 1.2);
           ctx.beginPath();
-          ctx.arc(cx, cy, rad * occ, 0, Math.PI * 2);
+          if (melt < 0.85 && typeof ctx.roundRect === "function") {
+            ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, cr);
+          } else {
+            ctx.arc(cx, cy, Math.min(hw, hh), 0, Math.PI * 2);
+          }
           ctx.fill();
+          if (melt < 0.08) return;
           for (const [dx, dy] of ORTHO) {
             if (dx < 0 || (dx === 0 && dy < 0)) continue;
             const nPrev = bit(previous, c + dx, r + dy);
@@ -613,11 +641,13 @@ export class LifeBlobRenderer {
     const cellCssH = (cssH / rows) * zoom;
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
-    const blobScale = 0.575 + g * 0.032;
+    const melt = Math.min(1, g / 1.2);
+    const blobScale = 0.5 + Math.max(0, g - 0.06) * 0.12;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
-    const cornerCss = Math.min(halfCssW, halfCssH);
-    const gooeyCss = minCell * (0.86 + g * 0.2);
+    const maxCorner = Math.min(halfCssW, halfCssH);
+    const cornerCss = 0.45 + melt * melt * (maxCorner - 0.45);
+    const gooeyCss = minCell * (0.018 + g * 0.2 + g * g * 0.08);
 
     return {
       cssW,
