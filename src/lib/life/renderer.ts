@@ -97,7 +97,6 @@ float neighborLinks(vec2 px, vec2 gc, float t, float rad) {
   d = min(d, orthoLink(px, a, occ, gc + vec2(0.0, -1.0), t, rad));
   return d;
 }
-}
 
 // Press the live surface toward the pointer. Scales with occupancy so
 // a vacant cell cannot open a hole or grow a filament.
