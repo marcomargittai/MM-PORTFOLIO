@@ -94,13 +94,13 @@ float neighborLinks(vec2 px, vec2 gc, float t, float rad) {
   return d;
 }
 
-// Elastic bulge of the *surface* only. Occupancy still comes from the
-// unwarped pixel so vacant cells cannot grow a filament.
-vec2 warpPx(vec2 px) {
+// Press the live surface toward the pointer. Scales with occupancy so
+// a vacant cell cannot open a hole or grow a filament.
+float pointerBulge(vec2 px, float occ) {
+  if (occ < 0.02 || uPointerAmp < 1e-4) return 0.0;
   vec2 d = px - uPointer;
   float r = max(uPointerRadius, 1.0);
-  float w = exp(-dot(d, d) / (r * r));
-  return px + d * (w * uPointerAmp);
+  return occ * uPointerAmp * exp(-dot(d, d) / (r * r));
 }
 
 void main() {
@@ -116,7 +116,6 @@ void main() {
   }
 
   vec2 base = floor(gridPos);
-  vec2 pxW = warpPx(px);
   float t = uBlend * uBlend * (3.0 - 2.0 * uBlend);
   float rad = min(uHalfExtents.x, uHalfExtents.y);
   float k = max(uGooey, 1e-4);
@@ -127,13 +126,15 @@ void main() {
     for (int i = -1; i <= 1; i++) {
       vec2 gc = base + vec2(float(i), float(j));
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
-      float d = cellField(pxW, gc, t, rad);
+      vec2 occ = sampleOcc(gc);
+      float o = mix(occ.x, occ.y, t);
+      float d = cellField(px, gc, t, rad + pointerBulge(px, o));
       if (d < lim && sd < lim) sd = smin(sd, d, k);
       else sd = min(sd, d);
     }
   }
 
-  sd = min(sd, neighborLinks(pxW, base, t, rad));
+  sd = min(sd, neighborLinks(px, base, t, rad));
 
   float aa = max(uSoftness, 1.15);
   if (sd > aa * 2.5) {
@@ -459,7 +460,7 @@ export class LifeBlobRenderer {
     const dpr = this.canvas!.width / Math.max(L.cssW, 1);
     gl.uniform2f(u.uPointer, this.ptrCssX * dpr, this.ptrCssY * dpr);
     const minCell = Math.min(L.cellDevW, L.cellDevH);
-    gl.uniform1f(u.uPointerAmp, this.ptrAmp * minCell * 0.55);
+    gl.uniform1f(u.uPointerAmp, this.ptrAmp * minCell * 0.85);
     gl.uniform1f(u.uPointerRadius, minCell * 2.6);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
