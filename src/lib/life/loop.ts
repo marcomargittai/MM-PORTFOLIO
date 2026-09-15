@@ -58,6 +58,7 @@ export class LifeLoop {
 
   pause(): void {
     this.playing = false;
+    this.align();
   }
 
   togglePlaying(): void {

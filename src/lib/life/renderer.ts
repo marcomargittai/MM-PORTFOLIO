@@ -71,27 +71,32 @@ vec2 cellCenter(vec2 gc) {
 // birth that never shared a generation.
 float cellField(vec2 px, vec2 gc, float t, float rad) {
   vec2 occ = sampleOcc(gc);
-  float o = mix(occ.x, occ.y, t);
+  float o = occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
   if (o < 0.02) return 1e5;
   return length(px - cellCenter(gc)) - rad * o;
 }
 
+float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
+  if (uWrap < 0.5 && !inGrid(nb, uGridSize)) return 1e5;
+  vec2 nocc = sampleOcc(nb);
+  float rLink = (occ.x * occ.y > 0.5 && nocc.x * nocc.y > 0.5)
+    ? rad
+    : rad * mix(occ.x * nocc.x, occ.y * nocc.y, t);
+  if (rLink < rad * 0.55) return 1e5;
+  return sdCapsule(px, a, cellCenter(nb), rLink);
+}
+
+// Orthogonal tubes only. Diagonals at mid-blend draw the wireframe mesh.
 float neighborLinks(vec2 px, vec2 gc, float t, float rad) {
   vec2 occ = sampleOcc(gc);
   vec2 a = cellCenter(gc);
   float d = 1e5;
-  for (int j = -1; j <= 1; j++) {
-    for (int i = -1; i <= 1; i++) {
-      if (i == 0 && j == 0) continue;
-      vec2 nb = gc + vec2(float(i), float(j));
-      if (uWrap < 0.5 && !inGrid(nb, uGridSize)) continue;
-      vec2 nocc = sampleOcc(nb);
-      float rLink = rad * mix(occ.x * nocc.x, occ.y * nocc.y, t);
-      if (rLink < 1e-3) continue;
-      d = min(d, sdCapsule(px, a, cellCenter(nb), rLink));
-    }
-  }
+  d = min(d, orthoLink(px, a, occ, gc + vec2(1.0, 0.0), t, rad));
+  d = min(d, orthoLink(px, a, occ, gc + vec2(-1.0, 0.0), t, rad));
+  d = min(d, orthoLink(px, a, occ, gc + vec2(0.0, 1.0), t, rad));
+  d = min(d, orthoLink(px, a, occ, gc + vec2(0.0, -1.0), t, rad));
   return d;
+}
 }
 
 // Press the live surface toward the pointer. Scales with occupancy so
@@ -128,7 +133,7 @@ void main() {
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
       vec2 occ = sampleOcc(gc);
       float o = mix(occ.x, occ.y, t);
-      float d = cellField(px, gc, t, rad + pointerBulge(px, o));
+      float d = cellField(px, gc, t, rad) - pointerBulge(px, o);
       if (d < lim && sd < lim) sd = smin(sd, d, k);
       else sd = min(sd, d);
     }
@@ -188,13 +193,6 @@ const ORTHO: Array<[number, number]> = [
   [0, 1],
   [0, -1],
 ];
-const DIAG: Array<[number, number]> = [
-  [1, 1],
-  [1, -1],
-  [-1, 1],
-  [-1, -1],
-];
-
 export class LifeBlobRenderer {
   goo = 0.22;
   wrap = true;
@@ -216,6 +214,9 @@ export class LifeBlobRenderer {
   private offCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 
   private layout: Layout | null = null;
+  private camX = 0;
+  private camY = 0;
+  private camScale = 1;
   private ptrCssX = -1e6;
   private ptrCssY = -1e6;
   private ptrAmp = 0;
@@ -273,6 +274,27 @@ export class LifeBlobRenderer {
     this.ptrCssX = -1e6;
     this.ptrCssY = -1e6;
     this.ptrAmp *= 0.5;
+  }
+
+  setCamera(x: number, y: number, scale: number): void {
+    this.camX = x;
+    this.camY = y;
+    this.camScale = scale;
+    if (this.layout) this.layout = this.computeLayout(this.layout.cols, this.layout.rows);
+  }
+
+  cellAtCss(cssX: number, cssY: number): { x: number; y: number } | null {
+    const L = this.layout;
+    if (!L || L.cellCssW <= 0 || L.cellCssH <= 0) return null;
+    let col = Math.floor((cssX - L.originCssX) / L.cellCssW);
+    let row = Math.floor((cssY - L.originCssY) / L.cellCssH);
+    if (this.wrap) {
+      col = ((col % L.cols) + L.cols) % L.cols;
+      row = ((row % L.rows) + L.rows) % L.rows;
+    } else if (col < 0 || row < 0 || col >= L.cols || row >= L.rows) {
+      return null;
+    }
+    return { x: col, y: row };
   }
 
   resize(): void {
@@ -519,19 +541,19 @@ export class LifeBlobRenderer {
       for (let c = 0; c < cols; c++) {
         const prev = previous[rowOff + c] ? 1 : 0;
         const next = current[rowOff + c] ? 1 : 0;
-        const occ = mix(prev, next, t);
+        const occ = prev && next ? 1 : mix(prev, next, t);
         if (occ < 0.02) continue;
 
         eachReplica(c, r, (cx, cy) => {
           ctx.beginPath();
           ctx.arc(cx, cy, rad * occ, 0, Math.PI * 2);
           ctx.fill();
-          for (const [dx, dy] of [...ORTHO, ...DIAG]) {
+          for (const [dx, dy] of ORTHO) {
             if (dx < 0 || (dx === 0 && dy < 0)) continue;
             const nPrev = bit(previous, c + dx, r + dy);
             const nNext = bit(current, c + dx, r + dy);
-            const rLink = rad * mix(prev * nPrev, next * nNext, t);
-            if (rLink < 0.4) continue;
+            const rLink = prev && next && nPrev && nNext ? rad : rad * mix(prev * nPrev, next * nNext, t);
+            if (rLink < rad * 0.55) continue;
             ctx.lineWidth = rLink * 2;
             ctx.beginPath();
             ctx.moveTo(cx, cy);
@@ -555,13 +577,11 @@ export class LifeBlobRenderer {
       canvas.clientHeight || parent?.clientHeight || (typeof window !== "undefined" ? window.innerHeight : 1),
     );
     const dpr = canvas.width / cssW;
-    const cellCssW = cssW / cols;
-    const cellCssH = cssH / rows;
+    const zoom = this.camScale;
+    const cellCssW = (cssW / cols) * zoom;
+    const cellCssH = (cssH / rows) * zoom;
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
-    // Default (g=0.22) already fills adjacent waists into one body. Stay
-    // under 0.64 scale / ~1.22 k so a vacant cell between two live ones
-    // cannot fill (midpoint sd stays > 0 even at 180).
     const blobScale = 0.575 + g * 0.032;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
@@ -573,12 +593,12 @@ export class LifeBlobRenderer {
       cssH,
       cols,
       rows,
-      originCssX: 0,
-      originCssY: 0,
+      originCssX: this.camX,
+      originCssY: this.camY,
       cellCssW,
       cellCssH,
-      originDevX: 0,
-      originDevY: 0,
+      originDevX: this.camX * dpr,
+      originDevY: this.camY * dpr,
       cellDevW: cellCssW * dpr,
       cellDevH: cellCssH * dpr,
       halfDevW: halfCssW * dpr,

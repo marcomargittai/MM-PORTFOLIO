@@ -28,7 +28,9 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 8;
+const RENDERER_REV = 9;
+const CAM_MIN = 0.35;
+const CAM_MAX = 8;
 
 function cellPx(): number {
   if (typeof window === "undefined") return 22;
@@ -81,6 +83,7 @@ export default function LifeHero() {
   const lastCellRef = useRef<{ x: number; y: number } | null>(null);
   const overlayRef = useRef(false);
   const playingRef = useRef(true);
+  const camRef = useRef({ x: 0, y: 0, scale: 1 });
 
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(DEFAULT_SPEED);
@@ -119,6 +122,49 @@ export default function LifeHero() {
   }, [overlayOpen]);
 
   useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const onWheel = (event: WheelEvent) => {
+      if (overlayRef.current) return;
+      event.preventDefault();
+      const cam = camRef.current;
+      const line = event.deltaMode === 1;
+      const page = event.deltaMode === 2;
+      const dy = event.deltaY * (line ? 16 : page ? host.clientHeight : 1);
+      const dx = event.deltaX * (line ? 16 : page ? host.clientWidth : 1);
+      if (event.ctrlKey) {
+        const rect = host.getBoundingClientRect();
+        const px = event.clientX - rect.left;
+        const py = event.clientY - rect.top;
+        const next = Math.min(
+          CAM_MAX,
+          Math.max(CAM_MIN, cam.scale * Math.exp(-(line ? event.deltaY * 0.05 : dy * 0.002))),
+        );
+        if (next === cam.scale) return;
+        const k = next / cam.scale;
+        cam.x = px - (px - cam.x) * k;
+        cam.y = py - (py - cam.y) * k;
+        cam.scale = next;
+      } else {
+        cam.x -= dx;
+        cam.y -= dy;
+      }
+      rendererRef.current?.setCamera(cam.x, cam.y, cam.scale);
+    };
+
+    const blockGesture = (event: Event) => event.preventDefault();
+    host.addEventListener("wheel", onWheel, { passive: false });
+    host.addEventListener("gesturestart", blockGesture, { passive: false });
+    host.addEventListener("gesturechange", blockGesture, { passive: false });
+    return () => {
+      host.removeEventListener("wheel", onWheel);
+      host.removeEventListener("gesturestart", blockGesture);
+      host.removeEventListener("gesturechange", blockGesture);
+    };
+  }, []);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     const host = hostRef.current;
     if (!canvas || !host) return;
@@ -135,6 +181,7 @@ export default function LifeHero() {
     const engine = new LifeEngine(cols, rows);
     const renderer = new LifeBlobRenderer();
     renderer.init(canvas, { wrap: true, goo: initialGoo / GOO_UNIT });
+    renderer.setCamera(camRef.current.x, camRef.current.y, camRef.current.scale);
 
     const loop = new LifeLoop({
       engine,
@@ -192,16 +239,9 @@ export default function LifeHero() {
 
   const hit = (clientX: number, clientY: number) => {
     const host = hostRef.current;
-    const engine = engineRef.current;
-    if (!host || !engine) return null;
+    if (!host) return null;
     const rect = host.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
-    const col = Math.min(engine.width - 1, Math.max(0, Math.floor((x / rect.width) * engine.width)));
-    const row = Math.min(engine.height - 1, Math.max(0, Math.floor((y / rect.height) * engine.height)));
-    return { x: col, y: row };
+    return rendererRef.current?.cellAtCss(clientX - rect.left, clientY - rect.top) ?? null;
   };
 
   const pauseForPaint = () => {
@@ -393,7 +433,7 @@ export default function LifeHero() {
     <section
       ref={hostRef}
       aria-label="Conway's Game of Life"
-      className={`${sans.className} relative h-dvh w-full overflow-hidden bg-black text-white`}
+      className={`${sans.className} relative h-dvh w-full overflow-hidden bg-black text-white [overscroll-behavior:none]`}
     >
       <canvas
         key={RENDERER_REV}
