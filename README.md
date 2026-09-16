@@ -4,24 +4,23 @@ An artistic [Conway’s Game of Life](https://en.wikipedia.org/wiki/Conway%27s_G
 
 ## How we work
 
-This chat stays in the cloud. You look at the site on the Mac.
+The chat stays in the cloud. The files and the browser stay on the Mac.
 
-1. I commit and push from here.
-2. On the Mac: `git pull && npm run dev`
-3. Open **http://127.0.0.1:43173** in Dia.
+Leave `npm run dev` open at **http://127.0.0.1:43173**. Run the Cloud Agent on **My Machines** in this repo. I edit those files; Next hot-reloads the tab you already have open. No pull. No tunnel.
 
-That is the loop. No tunnels.
-
-If the project is not on GitHub yet, click **Create repo** so `origin` is `github.com/marcomargittai/mm-life`. After that the Mac can clone or pull.
+One-time on the Mac, then you only talk:
 
 ```bash
 git clone https://github.com/marcomargittai/mm-life.git
 cd mm-life
 npm install
-npm run dev
+npm run dev          # leave this running
+agent worker start   # leave this running
 ```
 
-Every push to `main` also publishes GitHub Pages, so there is a URL that does not die with a cloud VM.
+Then start the next cloud chat with **Marco's MacBook Pro** selected. If this project is not on GitHub yet, click **Create repo** first so the worker can attach to it.
+
+GitHub Pages still publishes `main` if you want a URL that is not localhost.
 
 ## Play
 
