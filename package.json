@@ -7,8 +7,7 @@
     "build": "next build",
     "start": "next start -p 43173 -H 0.0.0.0",
     "lint": "eslint",
-    "test": "tsx src/lib/life/engine.test.ts && tsx src/lib/life/loop.test.ts",
-    "live": "bash scripts/keep-live.sh"
+    "test": "tsx src/lib/life/engine.test.ts && tsx src/lib/life/loop.test.ts"
   },
   "dependencies": {
     "next": "16.3.5",
