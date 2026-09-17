@@ -4,23 +4,25 @@ An artistic [Conway’s Game of Life](https://en.wikipedia.org/wiki/Conway%27s_G
 
 ## How we work
 
-The chat stays in the cloud. The files and the browser stay on the Mac.
+You build in **Cursor Cloud** (hosted, not My Machines). The agent commits to GitHub. A login item on the Mac pulls `main` about once a minute. It sleeps when there is nothing new, skips if you have local edits, and never runs Next or an agent worker.
 
-Leave `npm run dev` open at **http://127.0.0.1:43173**. Run the Cloud Agent on **My Machines** in this repo. I edit those files; Next hot-reloads the tab you already have open. No pull. No tunnel.
+The site URL is GitHub Pages on `main`. You do not need a terminal, `npm run dev`, or `agent worker start`.
 
-One-time on the Mac, then you only talk:
+Repo: [github.com/marcomargittai/MM-Portfolio](https://github.com/marcomargittai/MM-Portfolio)
+
+On the Mac the puller is already installed as `com.marco.mm-portfolio-pull`. Pause it with:
 
 ```bash
-git clone https://github.com/marcomargittai/mm-life.git
-cd mm-life
-npm install
-npm run dev          # leave this running
-agent worker start   # leave this running
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.marco.mm-portfolio-pull.plist
 ```
 
-Then start the next cloud chat with **Marco's MacBook Pro** selected. If this project is not on GitHub yet, click **Create repo** first so the worker can attach to it.
+Bring it back with:
 
-GitHub Pages still publishes `main` if you want a URL that is not localhost.
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.marco.mm-portfolio-pull.plist
+```
+
+When a Cloud Agent is done, have it push or merge to `main`. That is what the Mac pulls.
 
 ## Play
 
