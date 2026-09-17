@@ -17,6 +17,8 @@ export interface LifeLoopOptions {
   maxStepsPerFrame?: number;
   maxDelta?: number;
   onFrame?: (info: FrameInfo) => void;
+  /** Keep RAF alive for pointer wake / hover decay. */
+  isBusy?: () => boolean;
 }
 
 const MIN_SPEED = 0.25;
@@ -37,6 +39,7 @@ export class LifeLoop {
   blend = 1;
   previous: Uint8Array;
   onFrame: ((info: FrameInfo) => void) | undefined;
+  isBusy: (() => boolean) | undefined;
 
   private rafId: number | null = null;
   private lastTime = 0;
@@ -53,6 +56,7 @@ export class LifeLoop {
     this.maxStepsPerFrame = options.maxStepsPerFrame ?? 2;
     this.maxDelta = options.maxDelta ?? 0.25;
     this.onFrame = options.onFrame;
+    this.isBusy = options.isBusy;
     this.previous = new Uint8Array(options.engine.cells);
   }
 
@@ -129,8 +133,8 @@ export class LifeLoop {
     this.playing = false;
     this.queuedStep = false;
     this.ensurePrev();
-    this.restStroke = this.blend >= 1 - 1e-4 && !this.morphing;
-    if (!this.restStroke) {
+    this.restStroke = false;
+    if (this.blend < 1 - 1e-4 || this.morphing) {
       this.morphing = true;
       this.easeRemaining(SETTLE_DURATION);
     }
@@ -141,23 +145,18 @@ export class LifeLoop {
     this.ensurePrev();
     this.playing = false;
     const i = this.engine.index(x, y);
-
-    if (this.restStroke || (this.blend >= 1 - 1e-4 && !this.morphing)) {
-      if (!this.morphing || this.blend >= 1 - 1e-4) {
-        this.previous.set(this.engine.cells);
-        this.blend = 0;
-        this.easeRemaining(PAINT_MORPH);
-        this.restStroke = true;
-      }
-      this.engine.cells[i] = value;
-      this.morphing = true;
-      this.start();
-      return;
-    }
-
     this.engine.cells[i] = value;
-    this.morphing = true;
-    if (this.settleRate <= 0) this.easeRemaining(SETTLE_DURATION);
+    this.previous[i] = value;
+
+    const atRest = this.blend >= 1 - 1e-4 && !this.morphing;
+    if (atRest) {
+      this.blend = 1;
+      this.morphing = false;
+      this.restStroke = false;
+    } else {
+      this.morphing = true;
+      if (this.settleRate <= 0) this.easeRemaining(SETTLE_DURATION);
+    }
     this.start();
   }
 
@@ -292,7 +291,7 @@ export class LifeLoop {
     const dt = raw > this.maxDelta ? this.maxDelta : raw < 0 ? 0 : raw;
     const steps = this.applyTime(dt);
     this.emit(dt, steps);
-    const busy = this.playing || this.morphing || this.queuedStep;
+    const busy = this.playing || this.morphing || this.queuedStep || this.isBusy?.() === true;
     if (!busy) {
       this.idleFrames += 1;
       if (this.idleFrames > 10) {

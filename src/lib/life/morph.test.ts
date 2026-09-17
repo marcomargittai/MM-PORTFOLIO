@@ -371,9 +371,10 @@ check("landed glue keeps the t=0.75 blur kernel", Math.abs(skelFlux(1) - 1 / 9) 
 check("takeoff glue keeps the same rest kernel", Math.abs(skelFlux(0) - 1 / 9) < 1e-12);
 check("a still board stays on the rest kernel at mid-step", skelFlux(0.25, true) === SKEL_REST_FLUX);
 check(
-  "a changing board still dumps at a quarter",
-  Math.abs(skelFlux(0.25, false) - 1) < 1e-12,
+  "a changing board keeps rest glue thickness at dump",
+  Math.abs(skelFlux(0.25, false) - SKEL_REST_FLUX) < 1e-12,
 );
+check("glue thickness does not track morph time", skelFlux(0.25, false) === skelFlux(1));
 
 const water0 = waterField(0.5, 0.5, BAR, BAR, 0, lockedPull, lockedGoo);
 const water1 = waterField(0.5, 0.5, BAR, [[1, 0]], 1, lockedPull, lockedGoo);

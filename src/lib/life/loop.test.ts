@@ -1,5 +1,5 @@
 import { buffersEqual, LifeEngine } from "./engine";
-import { LifeLoop, PAINT_MORPH, SETTLE_DURATION } from "./loop";
+import { LifeLoop, SETTLE_DURATION } from "./loop";
 
 let failed = 0;
 
@@ -108,15 +108,38 @@ function midMorph(speed = 10) {
   loop.align();
   loop.beginStroke();
   loop.stamp(0, 0, 1);
-  check("paint at rest starts a grow morph", loop.settling && loop.blend === 0);
-  check("paint at rest does not snap the rest of the field", loop.previous[engine.index(1, 2)] === 1 && engine.get(1, 2) === 1);
-  check("paint at rest grows from empty", loop.previous[engine.index(0, 0)] === 0 && engine.get(0, 0) === 1);
-  const before = loop.blend;
+  const i = engine.index(0, 0);
+  const stay = engine.index(1, 2);
+  check("paint at rest lands in both buffers", loop.previous[i] === 1 && engine.get(0, 0) === 1);
+  check("paint at rest stays aligned", loop.blend === 1 && !loop.settling);
+  check("paint at rest does not snap the rest of the field", loop.previous[stay] === 1 && engine.get(1, 2) === 1);
   loop.tick(1 / 30);
-  const grew = before + (1 / PAINT_MORPH) * (1 / 30);
-  check("paint grow is timed", Math.abs(loop.blend - grew) < 1e-9);
-  flush(loop, 1);
-  check("paint grow lands aligned", loop.blend === 1 && !loop.settling && engine.get(0, 0) === 1);
+  check("paint at rest does not start a grow morph", loop.blend === 1 && !loop.settling);
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.beginStroke();
+  loop.stamp(2, 2, 0);
+  const i = engine.index(2, 2);
+  check("erase at rest clears both buffers", loop.previous[i] === 0 && engine.get(2, 2) === 0);
+  check("erase at rest stays aligned", loop.blend === 1 && !loop.settling);
+  check("erase does not snap neighbors", engine.get(1, 2) === 1 && loop.previous[engine.index(1, 2)] === 1);
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.beginStroke();
+  loop.stampLine(0, 0, 2, 0, 1);
+  check(
+    "drag lands every cell in previous and current",
+    [0, 1, 2].every((x) => loop.previous[engine.index(x, 0)] === 1 && engine.get(x, 0) === 1),
+  );
+  check("drag does not rewind blend", loop.blend === 1 && !loop.settling);
 }
 
 {
@@ -125,7 +148,8 @@ function midMorph(speed = 10) {
   loop.beginStroke();
   loop.stamp(0, 0, 1);
   check("paint mid-morph does not rewind blend", Math.abs(loop.blend - held) < 1e-9);
-  check("paint mid-morph writes current only", engine.get(0, 0) === 1);
+  check("paint mid-morph lands in both buffers", engine.get(0, 0) === 1 && loop.previous[engine.index(0, 0)] === 1);
+  check("paint mid-morph does not copy the whole current into previous", loop.previous[engine.index(1, 2)] === 1);
   flush(loop, 1);
   check("paint mid-morph settles without a snap", loop.blend === 1 && engine.get(0, 0) === 1);
 }

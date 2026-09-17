@@ -567,12 +567,15 @@ export function softOccField(
  */
 export const SKEL_SIGMA = 0.42;
 
-/** Occupancy-blur floor — liquidFluxNorm(0.75) = 1/9. Landed glue uses this. */
+/** Occupancy-blur kernel. Locked for rest and motion so settled glue
+ *  does not breathe when a generation or a paint morph is in flight.
+ *  Births and deaths still appear through the occupancy mix.
+ */
 export const SKEL_REST_FLUX = 1 / 9;
 
-export function skelFlux(t: number, identical = false): number {
-  if (identical) return SKEL_REST_FLUX;
-  return Math.max(liquidFluxNorm(t), SKEL_REST_FLUX);
+export function skelFlux(_t?: number, identical = false): number {
+  void identical;
+  return SKEL_REST_FLUX;
 }
 
 /**
