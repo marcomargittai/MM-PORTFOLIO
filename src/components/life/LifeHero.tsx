@@ -6,20 +6,7 @@ import { LifeEngine } from "@/lib/life/engine";
 import { LifeLoop } from "@/lib/life/loop";
 import { findPattern, type LifePattern } from "@/lib/life/patterns";
 import { patternCells } from "@/lib/life/patterns";
-import {
-  DEFAULT_GOO,
-  DEFAULT_PULL,
-  GOO_UNIT,
-  PULL_UNIT,
-  clampGoo,
-  clampPull,
-  keepGoo,
-  readGoo,
-  readKeptGoo,
-  readPull,
-  writeGoo,
-  writePull,
-} from "@/lib/life/prefs";
+import { GOO_UNIT, LOCKED_GOO, LOCKED_PULL, PULL_UNIT, readWiggle, writeWiggle } from "@/lib/life/prefs";
 import { LifeBlobRenderer } from "@/lib/life/renderer";
 import { InspirationsOverlay } from "./InspirationsOverlay";
 import { LifeChrome } from "./LifeChrome";
@@ -41,7 +28,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 19;
+const RENDERER_REV = 62;
 const CAM_MIN = 0.35;
 const CAM_MAX = 8;
 
@@ -95,18 +82,6 @@ function bootPattern(): LifePattern | undefined {
   return findPattern(q?.get("p") || DEFAULT_PATTERN) ?? findPattern(DEFAULT_PATTERN);
 }
 
-function bootGoo(): number {
-  const raw = query()?.get("goo");
-  if (raw != null) return clampGoo(Number(raw));
-  return readGoo();
-}
-
-function bootPull(): number {
-  const raw = query()?.get("pull");
-  if (raw != null) return clampPull(Number(raw));
-  return readPull();
-}
-
 function bootPlaying(): boolean {
   const raw = query()?.get("play");
   return raw !== "0" && raw !== "off";
@@ -129,18 +104,17 @@ export default function LifeHero() {
   const paintingRef = useRef(false);
   const paintAliveRef = useRef<0 | 1>(1);
   const lastCellRef = useRef<{ x: number; y: number } | null>(null);
+  const paintHudAtRef = useRef(0);
   const overlayRef = useRef(false);
   const playingRef = useRef(true);
   const camRef = useRef({ x: 0, y: 0, scale: 1 });
 
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(DEFAULT_SPEED);
-  const [goo, setGoo] = useState(DEFAULT_GOO);
-  const [pull, setPull] = useState(DEFAULT_PULL);
-  const [keptGoo, setKeptGoo] = useState<number | null>(null);
   const [population, setPopulation] = useState(1);
   const [generation, setGeneration] = useState(0);
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [wiggle, setWiggle] = useState(() => readWiggle());
 
   const syncHud = useCallback(() => {
     const engine = engineRef.current;
@@ -202,6 +176,7 @@ export default function LifeHero() {
         cam.y -= dy;
       }
       rendererRef.current?.setCamera(cam.x, cam.y, cam.scale);
+      loopRef.current?.nudge();
     };
 
     const blockGesture = (event: Event) => event.preventDefault();
@@ -228,27 +203,24 @@ export default function LifeHero() {
       Math.max(1, canvas.clientHeight || host.clientHeight || window.innerHeight),
     );
 
-    const initialGoo = bootGoo();
-    const initialPull = bootPull();
     const shouldPlay = bootPlaying();
-    setGoo(initialGoo);
-    setPull(initialPull);
-    setKeptGoo(readKeptGoo());
 
     const engine = new LifeEngine(cols, rows);
     const renderer = new LifeBlobRenderer();
     renderer.init(canvas, {
       wrap: true,
-      goo: initialGoo / GOO_UNIT,
-      pull: initialPull / PULL_UNIT,
+      goo: LOCKED_GOO / GOO_UNIT,
+      pull: LOCKED_PULL / PULL_UNIT,
     });
+    renderer.setWiggleEnabled(readWiggle());
     renderer.setCamera(camRef.current.x, camRef.current.y, camRef.current.scale);
 
     let hudAt = 0;
     const loop = new LifeLoop({
       engine,
       speed: DEFAULT_SPEED,
-      onFrame: ({ steps, blend, previous, current }) => {
+      onFrame: ({ steps, blend, morphDuration, previous, current }) => {
+        renderer.setMorphDuration(morphDuration);
         renderer.render(previous, current, engine.width, engine.height, blend);
         if (steps > 0) {
           const now = performance.now();
@@ -338,6 +310,7 @@ export default function LifeHero() {
     if (!host) return;
     const rect = host.getBoundingClientRect();
     rendererRef.current?.setPointer(clientX - rect.left, clientY - rect.top);
+    loopRef.current?.nudge();
   };
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -355,6 +328,7 @@ export default function LifeHero() {
     paintingRef.current = true;
     lastCellRef.current = cell;
     loopRef.current?.stamp(cell.x, cell.y, paintAliveRef.current);
+    paintHudAtRef.current = performance.now();
     syncHud();
   };
 
@@ -370,7 +344,11 @@ export default function LifeHero() {
     if (last) loopRef.current?.stampLine(last.x, last.y, cell.x, cell.y, paintAliveRef.current);
     else loopRef.current?.stamp(cell.x, cell.y, paintAliveRef.current);
     lastCellRef.current = cell;
-    syncHud();
+    const now = performance.now();
+    if (now - paintHudAtRef.current > 80) {
+      paintHudAtRef.current = now;
+      syncHud();
+    }
   };
 
   const endPaint = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -423,21 +401,12 @@ export default function LifeHero() {
     setSpeed(clamped);
   }, []);
 
-  const changeGoo = useCallback((next: number) => {
-    const value = writeGoo(next);
-    setGoo(value);
-    rendererRef.current?.setGoo(value / GOO_UNIT);
-  }, []);
-
-  const persistGoo = useCallback(() => {
-    const value = keepGoo(goo);
-    setKeptGoo(value);
-  }, [goo]);
-
-  const changePull = useCallback((next: number) => {
-    const value = writePull(next);
-    setPull(value);
-    rendererRef.current?.setPull(value / PULL_UNIT);
+  const toggleWiggle = useCallback(() => {
+    setWiggle((on) => {
+      const next = writeWiggle(!on);
+      rendererRef.current?.setWiggleEnabled(next);
+      return next;
+    });
   }, []);
 
   const pickPattern = useCallback(
@@ -533,7 +502,10 @@ export default function LifeHero() {
         onPointerMove={onPointerMove}
         onPointerUp={endPaint}
         onPointerCancel={endPaint}
-        onPointerLeave={() => rendererRef.current?.clearPointer()}
+        onPointerLeave={() => {
+          rendererRef.current?.clearPointer();
+          loopRef.current?.nudge();
+        }}
         onContextMenu={(event) => event.preventDefault()}
       />
 
@@ -544,19 +516,15 @@ export default function LifeHero() {
         speed={speed}
         speedMin={SPEED_MIN}
         speedMax={SPEED_MAX}
-        goo={goo}
-        pull={pull}
-        keptGoo={keptGoo}
         generation={generation}
         overlayOpen={overlayOpen}
+        wiggle={wiggle}
         onTogglePlay={togglePlay}
         onStep={step}
         onClear={clear}
         onChance={chance}
         onSpeed={changeSpeed}
-        onGoo={changeGoo}
-        onPull={changePull}
-        onKeepGoo={persistGoo}
+        onToggleWiggle={toggleWiggle}
         onInspirations={() => setOverlayOpen((open) => !open)}
       />
 

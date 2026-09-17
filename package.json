@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start -p 43173 -H 0.0.0.0",
     "lint": "eslint",
-    "test": "tsx src/lib/life/engine.test.ts && tsx src/lib/life/loop.test.ts"
+    "test": "tsx src/lib/life/engine.test.ts && tsx src/lib/life/loop.test.ts && tsx src/lib/life/magnetism.test.ts && tsx src/lib/life/death.test.ts && tsx src/lib/life/morph.test.ts",
+    "mac:install": "bash scripts/mac-install.sh",
+    "mac:uninstall": "bash scripts/mac-uninstall.sh"
   },
   "dependencies": {
     "next": "16.3.5",

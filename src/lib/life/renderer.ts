@@ -1,4 +1,10 @@
+import { growthWiggle, liquidEase } from "./death";
+import { pullKCells } from "./magnetism";
+import { SKEL_SIGMA, skelFlux } from "./morph";
 import { GOO_MAX, GOO_UNIT, PULL_MAX, PULL_UNIT } from "./prefs";
+
+/** Outward offset in pixels — hides tile hairlines without inflating corners. */
+const REST_SEAM_PX = 1.25;
 
 export type CellCoord = { col: number; row: number };
 
@@ -17,7 +23,7 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-const FRAG_SRC = `#version 300 es
+const COMMON = `#version 300 es
 precision highp float;
 
 uniform sampler2D uGrid;
@@ -25,32 +31,11 @@ uniform vec2 uGridSize;
 uniform vec2 uCellSize;
 uniform vec2 uOrigin;
 uniform vec2 uResolution;
-uniform vec2 uHalfExtents;
 uniform float uGooey;
 uniform float uPull;
 uniform float uCorner;
 uniform float uSoftness;
 uniform float uWrap;
-uniform float uBlend;
-uniform vec2 uPointer;
-uniform float uPointerAmp;
-uniform float uPointerRadius;
-
-out vec4 fragColor;
-
-float sdCapsule(vec2 p, vec2 a, vec2 b, float r) {
-  vec2 pa = p - a;
-  vec2 ba = b - a;
-  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
-  return length(pa - ba * h) - r;
-}
-
-// Polynomial smooth-min. The extra term dies at |a-b| >= k, so a vacant
-// cell between two live ones cannot grow a filament.
-float smin(float a, float b, float k) {
-  float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1e-5), 0.0, 1.0);
-  return mix(b, a, h) - k * h * (1.0 - h);
-}
 
 vec2 wrapCell(vec2 c, vec2 g) {
   return mod(mod(c, g) + g, g);
@@ -66,17 +51,13 @@ vec2 sampleOcc(vec2 gc) {
   return texelFetch(uGrid, ivec2(tc), 0).rg;
 }
 
+float sampleLive(vec2 gc, float ch) {
+  vec2 o = sampleOcc(gc);
+  return ch < 0.5 ? o.x : o.y;
+}
+
 vec2 cellCenter(vec2 gc) {
   return uOrigin + (gc + 0.5) * uCellSize;
-}
-
-float occupancy(vec2 occ, float t) {
-  return occ.x * occ.y > 0.5 ? 1.0 : mix(occ.x, occ.y, t);
-}
-
-// Live in both generations — this edge is not appearing or dying.
-bool settled(vec2 occ) {
-  return occ.x * occ.y > 0.5;
 }
 
 float sdRoundBox(vec2 p, vec2 b, float r) {
@@ -85,56 +66,248 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// Goo is corner radius — 0 is a tile, max is a disk. One field, not a
-// square sitting under a circle.
-float cellField(vec2 px, vec2 gc, float t) {
-  vec2 occ = sampleOcc(gc);
-  float o = occupancy(occ, t);
-  if (o < 0.02) return 1e5;
-  vec2 p = px - cellCenter(gc);
-  return sdRoundBox(p, uHalfExtents * o, uCorner * o);
+float sdRoundBox4(vec2 p, vec2 b, vec4 r) {
+  r.xy = (p.x > 0.0) ? r.xy : r.zw;
+  r.x = (p.y > 0.0) ? r.x : r.y;
+  r.x = max(r.x, 0.0);
+  vec2 q = abs(p) - b + r.x;
+  return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r.x;
 }
 
-float roundAmount() {
-  return uCorner / max(min(uHalfExtents.x, uHalfExtents.y), 1e-4);
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1e-5), 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
 }
 
-// Tubes only on edges that survive the step. A dying cell still has
-// occupancy for a while; welding it to a neighbor as it shrinks is the
-// mid-animation hairline.
-float orthoLink(vec2 px, vec2 a, vec2 occ, vec2 nb, float t, float rad) {
-  if (uWrap < 0.5 && !inGrid(nb, uGridSize)) return 1e5;
-  vec2 nocc = sampleOcc(nb);
-  if (!settled(occ) || !settled(nocc)) return 1e5;
-  if (roundAmount() < 0.62) return 1e5;
-  return sdCapsule(px, a, cellCenter(nb), rad);
+// Concave Goo-radius fillet at a 3-of-4 vertex, clipped to [0,rad]²
+// so the axis rays cannot become 1.25px hairlines after the seam.
+float restNotch(vec2 px, vec2 vertexGc, float A, float B, float C, float D, float rad) {
+  float n = A + B + C + D;
+  if (abs(n - 3.0) > 0.5 || rad < 1e-4) return 1e5;
+  vec2 q = px - (uOrigin + vertexGc * uCellSize);
+  if (A < 0.5) q = -q;
+  else if (B < 0.5) q.y = -q.y;
+  else if (C < 0.5) q.x = -q.x;
+  if (q.x < 0.0 || q.y < 0.0 || q.x > rad || q.y > rad) return 1e5;
+  return rad - length(vec2(rad) - q);
 }
 
-float neighborLinks(vec2 px, vec2 gc, float t, float rad) {
-  vec2 occ = sampleOcc(gc);
-  vec2 a = cellCenter(gc);
-  float d = 1e5;
-  d = min(d, orthoLink(px, a, occ, gc + vec2(1.0, 0.0), t, rad));
-  d = min(d, orthoLink(px, a, occ, gc + vec2(-1.0, 0.0), t, rad));
-  d = min(d, orthoLink(px, a, occ, gc + vec2(0.0, 1.0), t, rad));
-  d = min(d, orthoLink(px, a, occ, gc + vec2(0.0, -1.0), t, rad));
-  return d;
+bool needPull(vec2 a, vec2 b, float ch) {
+  vec2 d = b - a;
+  float adx = abs(d.x);
+  float ady = abs(d.y);
+  if (adx + ady < 1.5) return false;
+  if (adx > 0.5 && ady > 0.5) return true;
+  float sx = sign(d.x);
+  float sy = sign(d.y);
+  float steps = max(adx, ady);
+  for (int s = 1; s < 5; s++) {
+    if (float(s) >= steps - 0.5) break;
+    if (sampleLive(a + vec2(sx, sy) * float(s), ch) < 0.5) return true;
+  }
+  return false;
 }
 
-// Press the live surface toward the pointer. Scales with occupancy so
-// a vacant cell cannot open a hole or grow a filament.
-float pointerBulge(vec2 px, float occ) {
-  if (occ < 0.02 || uPointerAmp < 1e-4) return 0.0;
-  vec2 d = px - uPointer;
-  float r = max(uPointerRadius, 1.0);
-  return occ * uPointerAmp * exp(-dot(d, d) / (r * r));
+void restFullCore(vec2 px, float ch, out float fullD, out float coreD) {
+  vec2 gridPos = (px - uOrigin) / uCellSize;
+  vec2 base = floor(gridPos);
+  float blobScale = 0.5 + 0.1 * uPull;
+  float unionD = 1e5;
+  float alive[25];
+  vec2 gcs[25];
+  float ds[25];
+
+  for (int j = -2; j <= 2; j++) {
+    for (int i = -2; i <= 2; i++) {
+      int idx = (j + 2) * 5 + (i + 2);
+      vec2 gc = base + vec2(float(i), float(j));
+      gcs[idx] = gc;
+      float live = sampleLive(gc, ch);
+      alive[idx] = live;
+      ds[idx] = 1e5;
+      if (live < 0.5) continue;
+      float e = sampleLive(gc + vec2(1.0, 0.0), ch);
+      float w = sampleLive(gc + vec2(-1.0, 0.0), ch);
+      float s = sampleLive(gc + vec2(0.0, 1.0), ch);
+      float n = sampleLive(gc + vec2(0.0, -1.0), ch);
+      float ortho = max(e, max(w, max(s, n)));
+      float ne = sampleLive(gc + vec2(1.0, 1.0), ch);
+      float nw = sampleLive(gc + vec2(-1.0, 1.0), ch);
+      float se = sampleLive(gc + vec2(1.0, -1.0), ch);
+      float sw = sampleLive(gc + vec2(-1.0, -1.0), ch);
+      float diag = max(ne, max(nw, max(se, sw)));
+      float hu = (ortho > 0.5 || diag > 0.5) ? 0.5 : blobScale;
+      vec2 he = hu * uCellSize;
+      float rad = uCorner * hu * 2.0;
+      vec4 rads = vec4(
+        (1.0 - e) * (1.0 - s) * rad,
+        (1.0 - e) * (1.0 - n) * rad,
+        (1.0 - w) * (1.0 - s) * rad,
+        (1.0 - w) * (1.0 - n) * rad
+      );
+      ds[idx] = sdRoundBox4(px - cellCenter(gc), he, rads);
+      unionD = min(unionD, ds[idx]);
+    }
+  }
+
+  float field = unionD;
+  field = min(field, restNotch(px, base, alive[6], alive[7], alive[11], alive[12], uCorner));
+  field = min(field, restNotch(px, base + vec2(1.0, 0.0), alive[7], alive[8], alive[12], alive[13], uCorner));
+  field = min(field, restNotch(px, base + vec2(0.0, 1.0), alive[11], alive[12], alive[16], alive[17], uCorner));
+  field = min(field, restNotch(px, base + vec2(1.0, 1.0), alive[12], alive[13], alive[17], alive[18], uCorner));
+  field -= ${REST_SEAM_PX.toFixed(2)};
+  coreD = field;
+
+  if (uGooey <= 1e-4) { fullD = field; return; }
+
+  float minCell = min(uCellSize.x, uCellSize.y);
+  if (field < -0.25 * minCell || field > 1.65 * minCell) {
+    fullD = field;
+    return;
+  }
+
+  for (int n = 0; n < 25; n++) {
+    if (alive[n] < 0.5) continue;
+    for (int m = n + 1; m < 25; m++) {
+      if (alive[m] < 0.5) continue;
+      vec2 dlt = gcs[m] - gcs[n];
+      float cheb = max(abs(dlt.x), abs(dlt.y));
+      if (cheb > 2.5) continue;
+      if (abs(dlt.x) > 0.5 && abs(dlt.x) < 1.5 && abs(dlt.y) > 0.5 && abs(dlt.y) < 1.5) {
+        float o0 = sampleLive(vec2(gcs[n].x, gcs[m].y), ch);
+        float o1 = sampleLive(vec2(gcs[m].x, gcs[n].y), ch);
+        if (abs(o0 + o1 - 1.0) < 0.5) continue;
+      }
+      if (!needPull(gcs[n], gcs[m], ch)) continue;
+      if (ds[n] < 0.0 || ds[m] < 0.0) continue;
+      vec2 glueHe = 0.5 * uCellSize;
+      float glueR = min(uCorner, min(glueHe.x, glueHe.y));
+      float ga = sdRoundBox(px - cellCenter(gcs[n]), glueHe, glueR);
+      float gb = sdRoundBox(px - cellCenter(gcs[m]), glueHe, glueR);
+      field = min(field, smin(ga, gb, uGooey));
+    }
+  }
+  fullD = field;
+}
+`;
+
+const FIELD_SRC = `${COMMON}
+uniform float uBlend;
+out vec4 fragColor;
+
+void main() {
+  vec2 px = vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y);
+  vec2 gridPos = (px - uOrigin) / uCellSize;
+  if (uWrap < 0.5 && (
+      gridPos.x < 0.0 || gridPos.y < 0.0 ||
+      gridPos.x >= uGridSize.x || gridPos.y >= uGridSize.y)) {
+    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+  float aa = max(uSoftness, 1.15);
+  float fullD;
+  float coreD;
+  if (uBlend < 0.001) {
+    restFullCore(px, 0.0, fullD, coreD);
+    float a0 = 1.0 - smoothstep(-aa, aa, fullD);
+    float hold = 1.0 - smoothstep(-aa, aa, coreD);
+    fragColor = vec4(a0, a0, hold, 1.0);
+    return;
+  }
+  if (uBlend > 0.999) {
+    restFullCore(px, 1.0, fullD, coreD);
+    float a1 = 1.0 - smoothstep(-aa, aa, fullD);
+    float hold = 1.0 - smoothstep(-aa, aa, coreD);
+    fragColor = vec4(a1, a1, hold, 1.0);
+    return;
+  }
+  float f0;
+  float c0;
+  float f1;
+  float c1;
+  restFullCore(px, 0.0, f0, c0);
+  restFullCore(px, 1.0, f1, c1);
+  float a0 = 1.0 - smoothstep(-aa, aa, f0);
+  float a1 = 1.0 - smoothstep(-aa, aa, f1);
+  float hold = (1.0 - smoothstep(-aa, aa, c0)) * (1.0 - smoothstep(-aa, aa, c1));
+  fragColor = vec4(a0, a1, hold, 1.0);
+}
+`;
+
+const BLUR_SRC = `#version 300 es
+precision highp float;
+
+uniform sampler2D uField;
+uniform vec2 uResolution;
+uniform float uBlend;
+uniform float uSigma;
+uniform vec2 uAxis;
+uniform float uMix;
+uniform float uWiggle;
+
+out vec4 fragColor;
+
+float liquidEase(float t) {
+  t = clamp(t, 0.0, 1.0);
+  return t * t * (10.0 + t * (-20.0 + t * (15.0 - 4.0 * t)));
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec4 c = texture(uField, uv);
+  float t = uBlend;
+  float e = liquidEase(t);
+  float inter = uMix > 0.5 ? c.b : c.g;
+  float src = uMix > 0.5 ? mix(c.r, c.g, e) + uWiggle * max(c.g - c.r, 0.0) : c.r;
+  float sig = max(uSigma, 0.45);
+  float acc = 0.0;
+  float wsum = 0.0;
+  for (int i = -24; i <= 24; i++) {
+    float w = exp(-0.5 * float(i * i) / (sig * sig));
+    vec4 s = texture(uField, uv + uAxis * float(i) / uResolution);
+    float v = uMix > 0.5 ? mix(s.r, s.g, e) + uWiggle * max(s.g - s.r, 0.0) : s.r;
+    acc += v * w;
+    wsum += w;
+  }
+  fragColor = vec4(acc / max(wsum, 1e-6), inter, 0.0, 1.0);
+}
+`;
+
+const COMPOSE_SRC = `#version 300 es
+precision highp float;
+
+uniform sampler2D uField;
+uniform vec2 uResolution;
+uniform vec2 uOrigin;
+uniform vec2 uCellSize;
+uniform vec2 uGridSize;
+uniform float uWrap;
+uniform float uSigma;
+
+out vec4 fragColor;
+
+vec2 wrapCell(vec2 c, vec2 g) {
+  return mod(mod(c, g) + g, g);
+}
+
+bool inGrid(vec2 c, vec2 g) {
+  return c.x >= 0.0 && c.y >= 0.0 && c.x < g.x && c.y < g.y;
+}
+
+vec2 cellCenter(vec2 gc) {
+  return uOrigin + (gc + 0.5) * uCellSize;
 }
 
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y);
-  vec2 local = px - uOrigin;
-  vec2 gridPos = local / uCellSize;
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec2 c = texture(uField, uv).rg;
+  float blurred = c.r;
+  float inter = c.g;
+  float ae = max(0.035, 0.35 / max(uSigma, 1.0));
+  float body = max(inter, smoothstep(0.5 - ae, 0.5 + ae, blurred));
 
+  vec2 gridPos = (px - uOrigin) / uCellSize;
   if (uWrap < 0.5 && (
       gridPos.x < 0.0 || gridPos.y < 0.0 ||
       gridPos.x >= uGridSize.x || gridPos.y >= uGridSize.y)) {
@@ -142,72 +315,24 @@ void main() {
     return;
   }
 
-  vec2 base = floor(gridPos);
-  // Ease-out so the last of a generation settles instead of snapping.
-  float t = 1.0 - pow(1.0 - uBlend, 3.0);
-  float rad = min(uHalfExtents.x, uHalfExtents.y);
   float minCell = min(uCellSize.x, uCellSize.y);
-  float k = min(max(uGooey, 1e-4), minCell * 0.28);
-  float pull = smoothstep(0.03, 0.4, uPull);
-  float lim = minCell * 0.95;
-  float sd = 1e5;
-
-  for (int j = -1; j <= 1; j++) {
-    for (int i = -1; i <= 1; i++) {
-      vec2 gc = base + vec2(float(i), float(j));
-      if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
-      vec2 occ = sampleOcc(gc);
-      float o = occupancy(occ, t);
-      sd = min(sd, cellField(px, gc, t) - pointerBulge(px, o));
-    }
-  }
-
-  // Melt and tubes only along orthogonal edges, and only once both
-  // cells are mostly there. A 3×3 smin bridges diagonals mid-step
-  // and reads as connecting lines.
-  if (pull > 0.04) {
-    for (int j = -1; j <= 1; j++) {
-      for (int i = -1; i <= 1; i++) {
-        vec2 gc = base + vec2(float(i), float(j));
-        if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
-        vec2 occ0 = sampleOcc(gc);
-        float d0 = cellField(px, gc, t);
-        vec2 nbx = gc + vec2(1.0, 0.0);
-        vec2 nby = gc + vec2(0.0, 1.0);
-        vec2 occx = sampleOcc(nbx);
-        vec2 occy = sampleOcc(nby);
-        if (settled(occ0) && settled(occx)) {
-          float dx = cellField(px, nbx, t);
-          if (d0 < lim && dx < lim) sd = min(sd, smin(d0, dx, k));
-        }
-        if (settled(occ0) && settled(occy)) {
-          float dy = cellField(px, nby, t);
-          if (d0 < lim && dy < lim) sd = min(sd, smin(d0, dy, k));
-        }
-        float links = neighborLinks(px, gc, t, rad);
-        if (links < lim) sd = min(sd, links);
-      }
-    }
-  }
-
-  float aa = max(uSoftness, 1.15);
-  float liquid = 1.0 - smoothstep(-aa, aa, sd);
-
-  // Lattice site at every cell center — the places a dot can land.
   float dotR = clamp(minCell * 0.03, 1.15, 2.25);
   float lattice = 0.0;
+  vec2 base = floor(gridPos);
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
       vec2 gc = base + vec2(float(i), float(j));
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
+      if (uWrap >= 0.5) gc = wrapCell(gc, uGridSize);
       float d = length(px - cellCenter(gc));
       lattice = max(lattice, 1.0 - smoothstep(dotR * 0.35, dotR, d));
     }
   }
 
-  float a = max(liquid, lattice);
+  float a = max(body, lattice);
   fragColor = vec4(vec3(a), 1.0);
-}`;
+}
+`;
 
 type Layout = {
   cssW: number;
@@ -230,46 +355,69 @@ type Layout = {
   range: number;
 };
 
-type GlUniforms = {
+type FieldUniforms = {
   uGrid: WebGLUniformLocation;
   uGridSize: WebGLUniformLocation;
   uCellSize: WebGLUniformLocation;
   uOrigin: WebGLUniformLocation;
   uResolution: WebGLUniformLocation;
-  uHalfExtents: WebGLUniformLocation;
   uGooey: WebGLUniformLocation;
   uPull: WebGLUniformLocation;
   uCorner: WebGLUniformLocation;
   uSoftness: WebGLUniformLocation;
   uWrap: WebGLUniformLocation;
   uBlend: WebGLUniformLocation;
-  uPointer: WebGLUniformLocation;
-  uPointerAmp: WebGLUniformLocation;
-  uPointerRadius: WebGLUniformLocation;
 };
 
-const ORTHO: Array<[number, number]> = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
+type BlurUniforms = {
+  uField: WebGLUniformLocation;
+  uResolution: WebGLUniformLocation;
+  uBlend: WebGLUniformLocation;
+  uSigma: WebGLUniformLocation;
+  uAxis: WebGLUniformLocation;
+  uMix: WebGLUniformLocation;
+  uWiggle: WebGLUniformLocation;
+};
+
+type ComposeUniforms = {
+  uField: WebGLUniformLocation;
+  uResolution: WebGLUniformLocation;
+  uOrigin: WebGLUniformLocation;
+  uCellSize: WebGLUniformLocation;
+  uGridSize: WebGLUniformLocation;
+  uWrap: WebGLUniformLocation;
+  uSigma: WebGLUniformLocation;
+};
+
 export class LifeBlobRenderer {
   goo = 0.06;
   pull = 0.1;
   wrap = true;
   softness = 0.2;
+  wiggleEnabled = false;
 
   private canvas: HTMLCanvasElement | null = null;
   private gl: WebGL2RenderingContext | null = null;
-  private program: WebGLProgram | null = null;
   private vao: WebGLVertexArrayObject | null = null;
   private tex: WebGLTexture | null = null;
-  private uniforms: GlUniforms | null = null;
+  private fieldProg: WebGLProgram | null = null;
+  private blurProg: WebGLProgram | null = null;
+  private composeProg: WebGLProgram | null = null;
+  private fieldUni: FieldUniforms | null = null;
+  private blurUni: BlurUniforms | null = null;
+  private composeUni: ComposeUniforms | null = null;
+  private fboA: WebGLFramebuffer | null = null;
+  private fboB: WebGLFramebuffer | null = null;
+  private texA: WebGLTexture | null = null;
+  private texB: WebGLTexture | null = null;
+  private fboW = 0;
+  private fboH = 0;
   private texCols = 0;
   private texRows = 0;
   private upload: Uint8Array | null = null;
   private blend = 1;
+  private growth = 0;
+  private morphDuration = 1 / 12;
 
   private ctx2d: CanvasRenderingContext2D | null = null;
   private off2d: HTMLCanvasElement | OffscreenCanvas | null = null;
@@ -281,9 +429,9 @@ export class LifeBlobRenderer {
   private camScale = 1;
   private ptrCssX = -1e6;
   private ptrCssY = -1e6;
-  private ptrAmp = 0;
   private lastPtrCssX = 0;
   private lastPtrY = 0;
+  private identical = true;
 
   init(canvas: HTMLCanvasElement, opts: LifeBlobRendererOptions = {}): void {
     this.dispose();
@@ -298,7 +446,7 @@ export class LifeBlobRenderer {
       depth: false,
       stencil: false,
       premultipliedAlpha: false,
-      preserveDrawingBuffer: false,
+      preserveDrawingBuffer: true,
       powerPreference: "high-performance",
     });
 
@@ -306,12 +454,20 @@ export class LifeBlobRenderer {
       this.gl = gl;
       try {
         this.initGl(gl);
+        markGl("ok");
       } catch (err) {
         console.warn("Life WebGL2 init failed; using canvas2d.", err);
+        markGl(String(err));
+        try {
+          gl.getExtension("WEBGL_lose_context")?.loseContext();
+        } catch {
+          /* ignore */
+        }
         this.teardownGl();
         this.init2d(canvas);
       }
     } else {
+      markGl("no-webgl2");
       this.init2d(canvas);
     }
 
@@ -329,19 +485,24 @@ export class LifeBlobRenderer {
   }
 
   setPointer(cssX: number, cssY: number): void {
-    const dx = cssX - this.lastPtrCssX;
-    const dy = cssY - this.lastPtrY;
     this.lastPtrCssX = cssX;
     this.lastPtrY = cssY;
     this.ptrCssX = cssX;
     this.ptrCssY = cssY;
-    this.ptrAmp = Math.min(1, this.ptrAmp * 0.72 + Math.hypot(dx, dy) * 0.045);
   }
 
   clearPointer(): void {
     this.ptrCssX = -1e6;
     this.ptrCssY = -1e6;
-    this.ptrAmp *= 0.5;
+  }
+
+  setWiggleEnabled(on: boolean): void {
+    this.wiggleEnabled = on;
+  }
+
+  setMorphDuration(seconds: number): void {
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    this.morphDuration = seconds;
   }
 
   setCamera(x: number, y: number, scale: number): void {
@@ -407,11 +568,10 @@ export class LifeBlobRenderer {
     if (previous.length < n || current.length < n) return;
 
     this.blend = blend < 0 ? 0 : blend > 1 ? 1 : blend;
-    this.ptrAmp *= 0.9;
     this.layout = this.computeLayout(cols, rows);
     const packed = this.pack(previous, current, cols, rows);
 
-    if (this.gl && this.program && this.vao && this.tex && this.uniforms) {
+    if (this.gl && this.fieldProg && this.vao && this.tex && this.fieldUni) {
       this.renderGl(packed, cols, rows);
     } else if (this.ctx2d && this.offCtx && this.off2d) {
       this.render2d(previous, current, cols, rows);
@@ -439,16 +599,26 @@ export class LifeBlobRenderer {
       this.upload = new Uint8Array(n * 2);
     }
     const out = this.upload;
+    let n0 = 0;
+    let n1 = 0;
+    let same = true;
     for (let i = 0; i < n; i++) {
-      out[i * 2] = previous[i] ? 255 : 0;
-      out[i * 2 + 1] = current[i] ? 255 : 0;
+      const prev = previous[i] ? 1 : 0;
+      const next = current[i] ? 1 : 0;
+      out[i * 2] = prev ? 255 : 0;
+      out[i * 2 + 1] = next ? 255 : 0;
+      n0 += prev;
+      n1 += next;
+      if (prev !== next) same = false;
     }
+    this.growth = Math.max(0, n1 - n0);
+    this.identical = same;
     return out;
   }
 
-  private initGl(gl: WebGL2RenderingContext): void {
+  private link(gl: WebGL2RenderingContext, frag: string): WebGLProgram {
     const vs = compileShader(gl, gl.VERTEX_SHADER, VERT_SRC);
-    const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER, frag);
     const program = gl.createProgram();
     if (!program) throw new Error("program");
     gl.attachShader(program, vs);
@@ -461,6 +631,13 @@ export class LifeBlobRenderer {
       gl.deleteProgram(program);
       throw new Error(log);
     }
+    return program;
+  }
+
+  private initGl(gl: WebGL2RenderingContext): void {
+    const fieldProg = this.link(gl, FIELD_SRC);
+    const blurProg = this.link(gl, BLUR_SRC);
+    const composeProg = this.link(gl, COMPOSE_SRC);
 
     const vao = gl.createVertexArray();
     const tex = gl.createTexture();
@@ -475,50 +652,147 @@ export class LifeBlobRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    const loc = (name: string): WebGLUniformLocation => {
-      const u = gl.getUniformLocation(program, name);
+    const loc = (p: WebGLProgram, name: string): WebGLUniformLocation => {
+      const u = gl.getUniformLocation(p, name);
       if (!u) throw new Error(name);
       return u;
     };
 
-    this.program = program;
+    this.fieldProg = fieldProg;
+    this.blurProg = blurProg;
+    this.composeProg = composeProg;
     this.vao = vao;
     this.tex = tex;
-    this.uniforms = {
-      uGrid: loc("uGrid"),
-      uGridSize: loc("uGridSize"),
-      uCellSize: loc("uCellSize"),
-      uOrigin: loc("uOrigin"),
-      uResolution: loc("uResolution"),
-      uHalfExtents: loc("uHalfExtents"),
-      uGooey: loc("uGooey"),
-      uPull: loc("uPull"),
-      uCorner: loc("uCorner"),
-      uSoftness: loc("uSoftness"),
-      uWrap: loc("uWrap"),
-      uBlend: loc("uBlend"),
-      uPointer: loc("uPointer"),
-      uPointerAmp: loc("uPointerAmp"),
-      uPointerRadius: loc("uPointerRadius"),
+    this.fieldUni = {
+      uGrid: loc(fieldProg, "uGrid"),
+      uGridSize: loc(fieldProg, "uGridSize"),
+      uCellSize: loc(fieldProg, "uCellSize"),
+      uOrigin: loc(fieldProg, "uOrigin"),
+      uResolution: loc(fieldProg, "uResolution"),
+      uGooey: loc(fieldProg, "uGooey"),
+      uPull: loc(fieldProg, "uPull"),
+      uCorner: loc(fieldProg, "uCorner"),
+      uSoftness: loc(fieldProg, "uSoftness"),
+      uWrap: loc(fieldProg, "uWrap"),
+      uBlend: loc(fieldProg, "uBlend"),
+    };
+    this.blurUni = {
+      uField: loc(blurProg, "uField"),
+      uResolution: loc(blurProg, "uResolution"),
+      uBlend: loc(blurProg, "uBlend"),
+      uSigma: loc(blurProg, "uSigma"),
+      uAxis: loc(blurProg, "uAxis"),
+      uMix: loc(blurProg, "uMix"),
+      uWiggle: loc(blurProg, "uWiggle"),
+    };
+    this.composeUni = {
+      uField: loc(composeProg, "uField"),
+      uResolution: loc(composeProg, "uResolution"),
+      uOrigin: loc(composeProg, "uOrigin"),
+      uCellSize: loc(composeProg, "uCellSize"),
+      uGridSize: loc(composeProg, "uGridSize"),
+      uWrap: loc(composeProg, "uWrap"),
+      uSigma: loc(composeProg, "uSigma"),
     };
   }
 
+  private ensureTargets(gl: WebGL2RenderingContext, w: number, h: number): void {
+    if (this.fboW === w && this.fboH === h && this.texA && this.texB) return;
+    if (this.texA) gl.deleteTexture(this.texA);
+    if (this.texB) gl.deleteTexture(this.texB);
+    if (this.fboA) gl.deleteFramebuffer(this.fboA);
+    if (this.fboB) gl.deleteFramebuffer(this.fboB);
+
+    const makeTex = () => {
+      const t = gl.createTexture();
+      if (!t) throw new Error("fbo tex");
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    const makeFbo = (t: WebGLTexture) => {
+      const f = gl.createFramebuffer();
+      if (!f) throw new Error("fbo");
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error("fbo incomplete");
+      }
+      return f;
+    };
+
+    this.texA = makeTex();
+    this.texB = makeTex();
+    this.fboA = makeFbo(this.texA);
+    this.fboB = makeFbo(this.texB);
+    this.fboW = w;
+    this.fboH = h;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
   private init2d(canvas: HTMLCanvasElement): void {
-    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
-    if (!ctx) throw new Error("No WebGL2 or Canvas2D");
+    // After a WebGL context has touched this canvas, 2d is illegal on it.
+    // Prefer a plain 2d context — `desynchronized` returns null in some browsers.
+    let target = canvas;
+    let ctx =
+      target.getContext("2d", { alpha: false }) ||
+      target.getContext("2d");
+    if (!ctx) {
+      const next = document.createElement("canvas");
+      next.className = canvas.className;
+      const style = canvas.getAttribute("style");
+      if (style) next.setAttribute("style", style);
+      next.style.display = "block";
+      next.style.width = "100%";
+      next.style.height = "100%";
+      canvas.replaceWith(next);
+      target = next;
+      ctx = next.getContext("2d", { alpha: false }) || next.getContext("2d");
+    }
+    if (!ctx) {
+      markGl("no-2d");
+      return;
+    }
+    this.canvas = target;
     this.ctx2d = ctx;
     const off =
       typeof OffscreenCanvas === "function" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
-    const offCtx = off.getContext("2d");
-    if (!offCtx) throw new Error("offscreen 2d");
+    const offCtx =
+      off.getContext("2d", { willReadFrequently: true }) || off.getContext("2d");
+    if (!offCtx) {
+      markGl("no-offscreen-2d");
+      return;
+    }
     this.off2d = off;
     this.offCtx = offCtx;
+  }
+
+  private bindFieldUniforms(gl: WebGL2RenderingContext, cols: number, rows: number): void {
+    const L = this.layout!;
+    const u = this.fieldUni!;
+    gl.uniform1i(u.uGrid, 0);
+    gl.uniform2f(u.uGridSize, cols, rows);
+    gl.uniform2f(u.uCellSize, L.cellDevW, L.cellDevH);
+    gl.uniform2f(u.uOrigin, L.originDevX, L.originDevY);
+    gl.uniform2f(u.uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform1f(u.uGooey, L.gooeyDev);
+    gl.uniform1f(u.uPull, this.pull);
+    gl.uniform1f(u.uCorner, L.cornerDev);
+    gl.uniform1f(u.uSoftness, L.softDev);
+    gl.uniform1f(u.uWrap, this.wrap ? 1 : 0);
+    gl.uniform1f(u.uBlend, this.blend);
   }
 
   private renderGl(grid: Uint8Array, cols: number, rows: number): void {
     const gl = this.gl!;
     const L = this.layout!;
-    const u = this.uniforms!;
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    this.ensureTargets(gl, w, h);
 
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     if (cols !== this.texCols || rows !== this.texRows) {
@@ -529,68 +803,67 @@ export class LifeBlobRenderer {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cols, rows, gl.RG, gl.UNSIGNED_BYTE, grid);
     }
 
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    const t = this.blend;
+    const minCell = Math.min(L.cellDevW, L.cellDevH);
+    const sigma = Math.max(0.45, SKEL_SIGMA * minCell * skelFlux(t, this.identical));
+    const wiggle = this.wiggleEnabled ? growthWiggle(t, this.growth, this.morphDuration) : 0;
+
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
-    gl.clearColor(0, 0, 0, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
+    gl.viewport(0, 0, w, h);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboA);
+    gl.useProgram(this.fieldProg);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    this.bindFieldUniforms(gl, cols, rows);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-    gl.uniform1i(u.uGrid, 0);
-    gl.uniform2f(u.uGridSize, cols, rows);
-    gl.uniform2f(u.uCellSize, L.cellDevW, L.cellDevH);
-    gl.uniform2f(u.uOrigin, L.originDevX, L.originDevY);
-    gl.uniform2f(u.uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.uniform2f(u.uHalfExtents, L.halfDevW, L.halfDevH);
-    gl.uniform1f(u.uGooey, L.gooeyDev);
-    gl.uniform1f(u.uPull, this.pull);
-    gl.uniform1f(u.uCorner, L.cornerDev);
-    gl.uniform1f(u.uSoftness, L.softDev);
-    gl.uniform1f(u.uWrap, this.wrap ? 1 : 0);
-    gl.uniform1f(u.uBlend, this.blend);
-    const dpr = this.canvas!.width / Math.max(L.cssW, 1);
-    gl.uniform2f(u.uPointer, this.ptrCssX * dpr, this.ptrCssY * dpr);
-    const minCell = Math.min(L.cellDevW, L.cellDevH);
-    gl.uniform1f(u.uPointerAmp, this.ptrAmp * minCell * 0.85);
-    gl.uniform1f(u.uPointerRadius, minCell * 2.6);
+    const blur = this.blurUni!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboB);
+    gl.useProgram(this.blurProg);
+    gl.bindTexture(gl.TEXTURE_2D, this.texA);
+    gl.uniform1i(blur.uField, 0);
+    gl.uniform2f(blur.uResolution, w, h);
+    gl.uniform1f(blur.uBlend, this.blend);
+    gl.uniform1f(blur.uSigma, sigma);
+    gl.uniform1f(blur.uWiggle, wiggle);
+    gl.uniform2f(blur.uAxis, 1, 0);
+    gl.uniform1f(blur.uMix, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
 
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboA);
+    gl.bindTexture(gl.TEXTURE_2D, this.texB);
+    gl.uniform2f(blur.uAxis, 0, 1);
+    gl.uniform1f(blur.uMix, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    const c = this.composeUni!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(this.composeProg);
+    gl.bindTexture(gl.TEXTURE_2D, this.texA);
+    gl.uniform1i(c.uField, 0);
+    gl.uniform2f(c.uResolution, w, h);
+    gl.uniform2f(c.uOrigin, L.originDevX, L.originDevY);
+    gl.uniform2f(c.uCellSize, L.cellDevW, L.cellDevH);
+    gl.uniform2f(c.uGridSize, cols, rows);
+    gl.uniform1f(c.uWrap, this.wrap ? 1 : 0);
+    gl.uniform1f(c.uSigma, Math.max(sigma, 1));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  private render2d(
-    previous: Uint8Array | Uint8ClampedArray,
-    current: Uint8Array | Uint8ClampedArray,
+  private paintRest(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    bit: (c: number, r: number) => number,
     cols: number,
     rows: number,
   ): void {
-    const canvas = this.canvas!;
-    const ctx = this.ctx2d!;
     const L = this.layout!;
-    const w = canvas.width;
-    const h = canvas.height;
-    const t = 1 - (1 - this.blend) ** 3;
+    const seam = 0.6;
     const replicas = this.wrap ? [-1, 0, 1] : [0];
-    const rad = Math.min(L.halfDevW, L.halfDevH);
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, w, h);
-
-    const bit = (grid: Uint8Array | Uint8ClampedArray, c: number, r: number) => {
-      let x = c;
-      let y = r;
-      if (this.wrap) {
-        x = ((c % cols) + cols) % cols;
-        y = ((r % rows) + rows) % rows;
-      } else if (c < 0 || r < 0 || c >= cols || r >= rows) {
-        return 0;
-      }
-      return grid[y * cols + x] ? 1 : 0;
-    };
-
     const eachReplica = (c: number, r: number, draw: (cx: number, cy: number) => void) => {
       for (const oy of replicas) {
         if (oy !== 0 && r > 3 && r < rows - 4) continue;
@@ -602,62 +875,165 @@ export class LifeBlobRenderer {
         }
       }
     };
+    const fillBlob = (
+      cx: number,
+      cy: number,
+      hw: number,
+      hh: number,
+      cr: number | [number, number, number, number],
+    ) => {
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, cr);
+      } else {
+        ctx.rect(cx - hw, cy - hh, hw * 2, hh * 2);
+      }
+      ctx.fill();
+    };
 
+    ctx.fillStyle = "#fff";
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!bit(c, r)) continue;
+        const e = bit(c + 1, r);
+        const w = bit(c - 1, r);
+        const s = bit(c, r + 1);
+        const north = bit(c, r - 1);
+        const cr = Math.min(L.cornerDev, Math.min(L.halfDevW, L.halfDevH));
+        const radii: [number, number, number, number] = [
+          !e && !s ? cr : 0,
+          !e && !north ? cr : 0,
+          !w && !s ? cr : 0,
+          !w && !north ? cr : 0,
+        ];
+        eachReplica(c, r, (cx, cy) => {
+          fillBlob(cx, cy, L.halfDevW + seam, L.halfDevH + seam, radii);
+        });
+      }
+    }
+    const filletR = L.cornerDev;
+    if (filletR > 0.6) {
+      for (let r = -1; r < rows; r++) {
+        for (let c = -1; c < cols; c++) {
+          const a = bit(c, r);
+          const b = bit(c + 1, r);
+          const d = bit(c, r + 1);
+          const e = bit(c + 1, r + 1);
+          if (a + b + d + e !== 3) continue;
+          const vx = L.originDevX + (c + 1) * L.cellDevW;
+          const vy = L.originDevY + (r + 1) * L.cellDevH;
+          ctx.beginPath();
+          ctx.moveTo(vx, vy);
+          if (!e) {
+            ctx.lineTo(vx + filletR, vy);
+            ctx.arc(vx + filletR, vy + filletR, filletR, -Math.PI / 2, Math.PI, false);
+          } else if (!d) {
+            ctx.lineTo(vx - filletR, vy);
+            ctx.arc(vx - filletR, vy + filletR, filletR, -Math.PI / 2, 0, false);
+          } else if (!a) {
+            ctx.lineTo(vx - filletR, vy);
+            ctx.arc(vx - filletR, vy - filletR, filletR, Math.PI / 2, 0, true);
+          } else {
+            ctx.lineTo(vx + filletR, vy);
+            ctx.arc(vx + filletR, vy - filletR, filletR, Math.PI / 2, Math.PI, false);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  private render2d(
+    previous: Uint8Array | Uint8ClampedArray,
+    current: Uint8Array | Uint8ClampedArray,
+    cols: number,
+    rows: number,
+  ): void {
+    const canvas = this.canvas!;
+    const ctx = this.ctx2d!;
+    const off = this.off2d!;
+    const offCtx = this.offCtx!;
+    const L = this.layout!;
+    const w = canvas.width;
+    const h = canvas.height;
+    const t = this.blend;
+    const e = liquidEase(t);
+    const wiggle = this.wiggleEnabled ? growthWiggle(t, this.growth, this.morphDuration) : 0;
+
+    const bitOf = (grid: Uint8Array | Uint8ClampedArray, c: number, r: number) => {
+      let x = c;
+      let y = r;
+      if (this.wrap) {
+        x = ((c % cols) + cols) % cols;
+        y = ((r % rows) + rows) % rows;
+      } else if (c < 0 || r < 0 || c >= cols || r >= rows) {
+        return 0;
+      }
+      return grid[y * cols + x] ? 1 : 0;
+    };
+
+    offCtx.setTransform(1, 0, 0, 1, 0, 0);
+    const paintOne = (grid: Uint8Array | Uint8ClampedArray) => {
+      offCtx.fillStyle = "#000";
+      offCtx.fillRect(0, 0, w, h);
+      this.paintRest(offCtx, (c, r) => bitOf(grid, c, r), cols, rows);
+      return offCtx.getImageData(0, 0, w, h).data;
+    };
+    let prevData: Uint8ClampedArray;
+    let nextData: Uint8ClampedArray;
+    if (t < 0.001) {
+      prevData = nextData = paintOne(previous);
+    } else if (t > 0.999) {
+      prevData = nextData = paintOne(current);
+    } else {
+      prevData = paintOne(previous);
+      nextData = paintOne(current);
+    }
+
+    const mix = new Float32Array(w * h);
+    const inter = new Uint8Array(w * h);
+    for (let i = 0, p = 0; i < mix.length; i++, p += 4) {
+      const a = prevData[p] / 255;
+      const b = nextData[p] / 255;
+      mix[i] = a * (1 - e) + b * e + wiggle * Math.max(b - a, 0);
+      inter[i] = a > 0.5 && b > 0.5 ? 1 : 0;
+    }
+
+    const sigma = Math.max(
+      0.45,
+      SKEL_SIGMA * Math.min(L.cellDevW, L.cellDevH) * skelFlux(t, this.identical),
+    );
+    const blurred = boxBlur(mix, w, h, sigma);
+    const out = ctx.createImageData(w, h);
+    for (let i = 0, p = 0; i < blurred.length; i++, p += 4) {
+      const on = inter[i] || blurred[i] >= 0.5 ? 255 : 0;
+      out.data[p] = on;
+      out.data[p + 1] = on;
+      out.data[p + 2] = on;
+      out.data[p + 3] = 255;
+    }
+    ctx.putImageData(out, 0, 0);
+
+    const replicas = this.wrap ? [-1, 0, 1] : [0];
     const dotR = Math.min(2.25, Math.max(1.15, Math.min(L.cellDevW, L.cellDevH) * 0.03));
     ctx.fillStyle = "#fff";
     ctx.beginPath();
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        eachReplica(c, r, (cx, cy) => {
-          ctx.moveTo(cx + dotR, cy);
-          ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
-        });
+        for (const oy of replicas) {
+          if (oy !== 0 && r > 3 && r < rows - 4) continue;
+          for (const ox of replicas) {
+            if (ox !== 0 && c > 3 && c < cols - 4) continue;
+            const cx = L.originDevX + (c + ox * cols + 0.5) * L.cellDevW;
+            const cy = L.originDevY + (r + oy * rows + 0.5) * L.cellDevH;
+            ctx.moveTo(cx + dotR, cy);
+            ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+          }
+        }
       }
     }
     ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = rad * 2;
-
-    for (let r = 0; r < rows; r++) {
-      const rowOff = r * cols;
-      for (let c = 0; c < cols; c++) {
-        const prev = previous[rowOff + c] ? 1 : 0;
-        const next = current[rowOff + c] ? 1 : 0;
-        const occ = prev && next ? 1 : mix(prev, next, t);
-        if (occ < 0.02) continue;
-
-        eachReplica(c, r, (cx, cy) => {
-          const hw = L.halfDevW * occ;
-          const hh = L.halfDevH * occ;
-          const cr = Math.min(L.cornerDev * occ, Math.min(hw, hh));
-          ctx.beginPath();
-          if (typeof ctx.roundRect === "function") {
-            ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, cr);
-          } else if (cr < 0.5) {
-            ctx.rect(cx - hw, cy - hh, hw * 2, hh * 2);
-          } else {
-            ctx.arc(cx, cy, Math.min(hw, hh), 0, Math.PI * 2);
-          }
-          ctx.fill();
-          const roundAmt = L.cornerDev / Math.max(Math.min(L.halfDevW, L.halfDevH), 1e-4);
-          if (this.pull < 0.08 || roundAmt < 0.62) return;
-          if (!(prev && next)) return;
-          for (const [dx, dy] of ORTHO) {
-            if (dx < 0 || (dx === 0 && dy < 0)) continue;
-            const nPrev = bit(previous, c + dx, r + dy);
-            const nNext = bit(current, c + dx, r + dy);
-            if (!(nPrev && nNext)) continue;
-            ctx.lineWidth = rad * 2;
-            ctx.beginPath();
-            ctx.moveTo(cx, cy);
-            ctx.lineTo(cx + dx * L.cellDevW, cy + dy * L.cellDevH);
-            ctx.stroke();
-          }
-        });
-      }
-    }
   }
 
   private computeLayout(cols: number, rows: number): Layout {
@@ -678,13 +1054,13 @@ export class LifeBlobRenderer {
     const minCell = Math.min(cellCssW, cellCssH);
     const g = this.goo;
     const p = this.pull;
-    const round = Math.min(1, g / GOO_INTENSITY_MAX);
-    const blobScale = 0.5 + p * 0.075;
+    const round = Math.min(1, Math.max(0, g / GOO_INTENSITY_MAX));
+    const blobScale = 0.5;
     const halfCssW = cellCssW * blobScale;
     const halfCssH = cellCssH * blobScale;
     const maxCorner = Math.min(halfCssW, halfCssH);
     const cornerCss = round * maxCorner;
-    const gooeyCss = minCell * (0.01 + p * 0.58);
+    const gooeyCss = pullKCells(p) * minCell;
 
     return {
       cssW,
@@ -712,21 +1088,38 @@ export class LifeBlobRenderer {
     const gl = this.gl;
     if (gl) {
       if (this.tex) gl.deleteTexture(this.tex);
+      if (this.texA) gl.deleteTexture(this.texA);
+      if (this.texB) gl.deleteTexture(this.texB);
+      if (this.fboA) gl.deleteFramebuffer(this.fboA);
+      if (this.fboB) gl.deleteFramebuffer(this.fboB);
       if (this.vao) gl.deleteVertexArray(this.vao);
-      if (this.program) gl.deleteProgram(this.program);
+      if (this.fieldProg) gl.deleteProgram(this.fieldProg);
+      if (this.blurProg) gl.deleteProgram(this.blurProg);
+      if (this.composeProg) gl.deleteProgram(this.composeProg);
     }
     this.gl = null;
-    this.program = null;
+    this.fieldProg = null;
+    this.blurProg = null;
+    this.composeProg = null;
     this.vao = null;
     this.tex = null;
-    this.uniforms = null;
+    this.texA = null;
+    this.texB = null;
+    this.fboA = null;
+    this.fboB = null;
+    this.fieldUni = null;
+    this.blurUni = null;
+    this.composeUni = null;
     this.texCols = 0;
     this.texRows = 0;
+    this.fboW = 0;
+    this.fboH = 0;
   }
 }
 
-function mix(a: number, b: number, t: number) {
-  return a + (b - a) * t;
+function markGl(status: string) {
+  if (typeof window === "undefined") return;
+  (window as Window & { __mmLifeGL?: string }).__mmLifeGL = status;
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -740,6 +1133,36 @@ function compileShader(gl: WebGL2RenderingContext, type: number, src: string): W
     throw new Error(log);
   }
   return sh;
+}
+
+function boxBlur(src: Float32Array, w: number, h: number, sigma: number): Float32Array {
+  if (sigma < 0.45) return src;
+  const r = Math.max(1, Math.ceil(sigma * 2.2));
+  const ker: number[] = [];
+  let sum = 0;
+  for (let i = -r; i <= r; i++) {
+    const v = Math.exp((-0.5 * i * i) / (sigma * sigma));
+    ker.push(v);
+    sum += v;
+  }
+  for (let i = 0; i < ker.length; i++) ker[i] /= sum;
+  const tmp = new Float32Array(w * h);
+  const out = new Float32Array(w * h);
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += src[j * w + Math.min(w - 1, Math.max(0, i + k))] * ker[k + r];
+      tmp[j * w + i] = acc;
+    }
+  }
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += tmp[Math.min(h - 1, Math.max(0, j + k)) * w + i] * ker[k + r];
+      out[j * w + i] = acc;
+    }
+  }
+  return out;
 }
 
 export default LifeBlobRenderer;

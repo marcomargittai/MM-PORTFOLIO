@@ -171,6 +171,16 @@ function midMorph(speed = 10) {
   loop.stop();
 }
 
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.pause();
+  loop.nudge();
+  check("nudge can wake an idle loop", true);
+  loop.stop();
+}
+
 if (failed > 0) {
   process.exit(1);
 }

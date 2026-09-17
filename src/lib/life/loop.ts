@@ -6,6 +6,7 @@ export interface FrameInfo {
   playing: boolean;
   generation: number;
   blend: number;
+  morphDuration: number;
   previous: Uint8Array;
   current: Uint8Array;
 }
@@ -44,6 +45,7 @@ export class LifeLoop {
   private settleRate = 0;
   private restStroke = false;
   private queuedStep = false;
+  private idleFrames = 0;
 
   constructor(options: LifeLoopOptions) {
     this.engine = options.engine;
@@ -56,6 +58,18 @@ export class LifeLoop {
 
   get settling(): boolean {
     return this.morphing;
+  }
+
+  /** Wall-clock length of the current 0→1 blend. */
+  get morphDuration(): number {
+    if (this.playing) return 1 / Math.max(this.speed, MIN_SPEED);
+    if (this.restStroke) return PAINT_MORPH;
+    if (this.morphing && this.settleRate > 0) {
+      const remaining = Math.max(1 - this.blend, 1e-4);
+      return remaining / this.settleRate;
+    }
+    if (this.morphing) return MANUAL_MORPH;
+    return 1 / Math.max(this.speed, MIN_SPEED);
   }
 
   setSpeed(generationsPerSecond: number): void {
@@ -175,11 +189,18 @@ export class LifeLoop {
   }
 
   start(): void {
+    this.idleFrames = 0;
     if (this.running) return;
     if (typeof requestAnimationFrame !== "function") return;
     this.running = true;
     this.lastTime = performance.now();
     this.rafId = requestAnimationFrame(this.frame);
+  }
+
+  /** Wake a sleeping loop for pointer / camera, then let it idle out. */
+  nudge(): void {
+    this.idleFrames = 0;
+    this.start();
   }
 
   stop(): void {
@@ -229,9 +250,7 @@ export class LifeLoop {
         // first frames of the next morph and read as a snap.
         return steps;
       }
-      let inc = playDt * this.speed;
-      if (this.blend > 0.78) inc *= 0.42;
-      this.blend += inc;
+      this.blend += playDt * this.speed;
       if (this.blend >= 1) {
         this.blend = 1;
         this.queuedStep = true;
@@ -258,6 +277,7 @@ export class LifeLoop {
       playing: this.playing,
       generation: this.engine.generation,
       blend,
+      morphDuration: this.morphDuration,
       previous: this.previous,
       current: this.engine.cells,
     };
@@ -272,6 +292,17 @@ export class LifeLoop {
     const dt = raw > this.maxDelta ? this.maxDelta : raw < 0 ? 0 : raw;
     const steps = this.applyTime(dt);
     this.emit(dt, steps);
+    const busy = this.playing || this.morphing || this.queuedStep;
+    if (!busy) {
+      this.idleFrames += 1;
+      if (this.idleFrames > 10) {
+        this.running = false;
+        this.rafId = null;
+        return;
+      }
+    } else {
+      this.idleFrames = 0;
+    }
     this.rafId = requestAnimationFrame(this.frame);
   };
 }

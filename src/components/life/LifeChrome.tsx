@@ -1,6 +1,5 @@
 "use client";
 
-import { GOO_MAX, GOO_MIN, PULL_MAX, PULL_MIN } from "@/lib/life/prefs";
 import { HairlineSlider } from "./HairlineSlider";
 
 type LifeChromeProps = {
@@ -10,19 +9,15 @@ type LifeChromeProps = {
   speed: number;
   speedMin: number;
   speedMax: number;
-  goo: number;
-  pull: number;
-  keptGoo: number | null;
   generation: number;
   overlayOpen: boolean;
+  wiggle: boolean;
   onTogglePlay: () => void;
   onStep: () => void;
   onClear: () => void;
   onChance: () => void;
   onSpeed: (value: number) => void;
-  onGoo: (value: number) => void;
-  onPull: (value: number) => void;
-  onKeepGoo: () => void;
+  onToggleWiggle: () => void;
   onInspirations: () => void;
 };
 
@@ -40,19 +35,15 @@ export function LifeChrome({
   speed,
   speedMin,
   speedMax,
-  goo,
-  pull,
-  keptGoo,
   generation,
   overlayOpen,
+  wiggle,
   onTogglePlay,
   onStep,
   onClear,
   onChance,
   onSpeed,
-  onGoo,
-  onPull,
-  onKeepGoo,
+  onToggleWiggle,
   onInspirations,
 }: LifeChromeProps) {
   const verbs = [
@@ -100,6 +91,14 @@ export function LifeChrome({
         </div>
 
         <div className="pointer-events-auto flex w-full max-w-xs flex-col gap-5 md:w-72">
+          <button
+            type="button"
+            className={`${word} self-start ${wiggle ? "" : "opacity-35"}`}
+            aria-pressed={wiggle}
+            onClick={onToggleWiggle}
+          >
+            Wiggle {wiggle ? "on" : "off"}
+          </button>
           <HairlineSlider
             label="Pace"
             value={speed}
@@ -108,32 +107,6 @@ export function LifeChrome({
             display={`${speed} /s`}
             onChange={onSpeed}
           />
-          <div className="flex flex-col gap-2">
-            <HairlineSlider
-              label="Goo"
-              value={goo}
-              min={GOO_MIN}
-              max={GOO_MAX}
-              display={String(goo)}
-              onChange={onGoo}
-            />
-            <HairlineSlider
-              label="Pull"
-              value={pull}
-              min={PULL_MIN}
-              max={PULL_MAX}
-              display={String(pull)}
-              onChange={onPull}
-            />
-            <div className="flex items-baseline justify-between text-[10px] uppercase tracking-[0.22em]">
-              <button type="button" className={word} onClick={onKeepGoo}>
-                Keep
-              </button>
-              <span className="text-white/40 tabular-nums">
-                {keptGoo == null ? "Nothing kept" : `Kept ${keptGoo}`}
-              </span>
-            </div>
-          </div>
           <p className="text-[10px] uppercase tracking-[0.22em] text-white/40 tabular-nums">
             Gen. {formatGen(generation)}
           </p>

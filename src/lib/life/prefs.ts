@@ -1,14 +1,23 @@
 export const GOO_STORAGE_KEY = "mm-life-goo";
 export const GOO_KEPT_KEY = "mm-life-goo-kept";
 export const PULL_STORAGE_KEY = "mm-life-pull";
+export const WIGGLE_STORAGE_KEY = "mm-life-wiggle";
 
 export const GOO_MIN = 0;
 export const GOO_MAX = 300;
-export const DEFAULT_GOO = 6;
+/** Locked look — iterate on this setting only. */
+export const LOCKED_GOO = 140;
+export const DEFAULT_GOO = LOCKED_GOO;
+/** Nearly-disks, the Yuga Labs cell. */
+export const YUGA_GOO = 220;
 
 export const PULL_MIN = 0;
 export const PULL_MAX = 200;
-export const DEFAULT_PULL = 10;
+/** Locked look — iterate on this setting only. */
+export const LOCKED_PULL = 43;
+export const DEFAULT_PULL = LOCKED_PULL;
+/** Neighbor weld on yuga.com — slider 100. */
+export const YUGA_PULL = 100;
 
 /** Slider units → renderer intensity. 100 is a full melt; the slider goes past it. */
 export const GOO_UNIT = 100;
@@ -70,4 +79,19 @@ export function writePull(value: number): number {
     window.localStorage.setItem(PULL_STORAGE_KEY, String(next));
   }
   return next;
+}
+
+/** Growth jiggle — off until asked, so the locked morph stays bit-identical. */
+export function readWiggle(): boolean {
+  if (typeof window === "undefined") return false;
+  const raw = window.localStorage.getItem(WIGGLE_STORAGE_KEY);
+  if (raw == null) return false;
+  return raw === "1" || raw === "on" || raw === "true";
+}
+
+export function writeWiggle(on: boolean): boolean {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(WIGGLE_STORAGE_KEY, on ? "1" : "0");
+  }
+  return on;
 }
