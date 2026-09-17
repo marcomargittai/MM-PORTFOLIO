@@ -369,9 +369,9 @@ void main() {
       if (uWrap >= 0.5) gc = wrapCell(gc, uGridSize);
       vec2 center = cellCenter(gc);
       float infl = hoverAt(center);
-      float half = dotR * (1.0 + ${PTR_SIZE_GAIN.toFixed(2)} * infl);
-      float rad = half * mix(1.0, ${PTR_CORNER_HOVER.toFixed(2)}, infl);
-      float sd = sdRoundBox(px - center, vec2(half), rad);
+      float dotHalf = dotR * (1.0 + ${PTR_SIZE_GAIN.toFixed(2)} * infl);
+      float rad = dotHalf * mix(1.0, ${PTR_CORNER_HOVER.toFixed(2)}, infl);
+      float sd = sdRoundBox(px - center, vec2(dotHalf), rad);
       float aa = max(0.75, fwidth(sd));
       lattice = max(lattice, 1.0 - smoothstep(0.0, aa, sd));
     }
