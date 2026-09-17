@@ -10,7 +10,7 @@ Local preview stays up at **http://127.0.0.1:43173** with no terminal. A login i
 
 You do not need `npm run dev` or `agent worker start`.
 
-Repo: [github.com/marcomargittai/MM-Portfolio](https://github.com/marcomargittai/MM-Portfolio)
+Repo: [github.com/marcomargittai/MM-PORTFOLIO](https://github.com/marcomargittai/MM-PORTFOLIO)
 
 On the Mac the puller is `com.marco.mm-portfolio-pull` and the preview is `com.marco.mm-portfolio-preview`. Pause the puller with:
 
