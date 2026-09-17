@@ -6,20 +6,28 @@ An artistic [Conway’s Game of Life](https://en.wikipedia.org/wiki/Conway%27s_G
 
 You build in **Cursor Cloud** (hosted, not My Machines). The agent commits to GitHub. A login item on the Mac pulls `main` about once a minute. It sleeps when there is nothing new, skips if you have local edits, and never runs Next or an agent worker.
 
-The site URL is GitHub Pages on `main`. You do not need a terminal, `npm run dev`, or `agent worker start`.
+Local preview stays up at **http://127.0.0.1:43173** with no terminal. A login item serves the static export. After each pull it rebuilds, then you refresh the tab. GitHub Pages is the public URL.
+
+You do not need `npm run dev` or `agent worker start`.
 
 Repo: [github.com/marcomargittai/MM-Portfolio](https://github.com/marcomargittai/MM-Portfolio)
 
-On the Mac the puller is already installed as `com.marco.mm-portfolio-pull`. Pause it with:
+On the Mac the puller is `com.marco.mm-portfolio-pull` and the preview is `com.marco.mm-portfolio-preview`. Pause the puller with:
 
 ```bash
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.marco.mm-portfolio-pull.plist
 ```
 
-Bring it back with:
+Bring the puller back with:
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.marco.mm-portfolio-pull.plist
+```
+
+Pause the local preview with:
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.marco.mm-portfolio-preview.plist
 ```
 
 When a Cloud Agent is done, have it push or merge to `main`. That is what the Mac pulls.
