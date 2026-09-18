@@ -28,7 +28,7 @@ const SPEED_MIN = 1;
 const SPEED_MAX = 60;
 const DEFAULT_SPEED = 12;
 const DEFAULT_PATTERN = "gosper-glider-gun";
-const RENDERER_REV = 68;
+const RENDERER_REV = 69;
 const CAM_MIN = 0.35;
 const CAM_MAX = 8;
 
@@ -220,9 +220,13 @@ export default function LifeHero() {
       engine,
       speed: DEFAULT_SPEED,
       isBusy: () => renderer.needsWake,
-      onFrame: ({ steps, blend, morphDuration, previous, current }) => {
+      onFrame: ({ steps, blend, morphDuration, previous, current, dirty, paintOverlay, rebuildField }) => {
         renderer.setMorphDuration(morphDuration);
-        renderer.render(previous, current, engine.width, engine.height, blend);
+        renderer.render(previous, current, engine.width, engine.height, blend, {
+          dirty,
+          paintOverlay,
+          rebuildField,
+        });
         if (steps > 0) {
           const now = performance.now();
           if (now - hudAt > 140) {
@@ -356,6 +360,8 @@ export default function LifeHero() {
     if (!paintingRef.current) return;
     paintingRef.current = false;
     lastCellRef.current = null;
+    loopRef.current?.endStroke();
+    syncHud();
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
     } catch {
@@ -505,6 +511,12 @@ export default function LifeHero() {
         onPointerCancel={endPaint}
         onPointerLeave={() => {
           rendererRef.current?.clearPointer();
+          if (paintingRef.current) {
+            paintingRef.current = false;
+            lastCellRef.current = null;
+            loopRef.current?.endStroke();
+            syncHud();
+          }
           loopRef.current?.nudge();
         }}
         onContextMenu={(event) => event.preventDefault()}

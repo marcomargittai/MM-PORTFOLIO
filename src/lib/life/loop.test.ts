@@ -140,6 +140,67 @@ function midMorph(speed = 10) {
     [0, 1, 2].every((x) => loop.previous[engine.index(x, 0)] === 1 && engine.get(x, 0) === 1),
   );
   check("drag does not rewind blend", loop.blend === 1 && !loop.settling);
+  check("drag dirty lists every cell before emit", loop.dirty.length === 3 && loop.paintOverlay);
+  const drag = loop.tick(1 / 60);
+  check("drag overlay emits all three cells", drag.paintOverlay && drag.dirty.length === 3);
+  check("drag overlay does not rebuild the field", drag.rebuildField === false);
+  check("overlay emit consumes dirty", loop.dirty.length === 0 && loop.paintOverlay);
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.beginStroke();
+  loop.stamp(0, 0, 1);
+  const first = loop.tick(1 / 60);
+  check("rest stamp marks overlay", first.paintOverlay === true && first.rebuildField === false);
+  check(
+    "rest stamp lists the dirty cell",
+    first.dirty.length === 1 && first.dirty[0].x === 0 && first.dirty[0].y === 0 && first.dirty[0].value === 1,
+  );
+  check("overlay stays armed after emit", loop.paintOverlay === true && loop.dirty.length === 0);
+  const idle = loop.tick(1 / 60);
+  check("idle overlay frame has no dirty tiles", idle.paintOverlay && idle.dirty.length === 0 && !idle.rebuildField);
+
+  loop.stamp(1, 0, 1);
+  const next = loop.tick(1 / 60);
+  check("next stamp only lists new dirty", next.dirty.length === 1 && next.dirty[0].x === 1 && next.paintOverlay);
+
+  loop.endStroke();
+  check("endStroke disarms overlay", loop.paintOverlay === false && loop.dirty.length === 0);
+  check("endStroke asks for a rebuild", loop.rebuildField === true);
+  const rebuilt = loop.tick(1 / 60);
+  check("rebuild flag is delivered once", rebuilt.rebuildField === true && rebuilt.paintOverlay === false);
+  check("rebuild flag clears after emit", loop.rebuildField === false);
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.beginStroke();
+  loop.stamp(0, 0, 1);
+  loop.tick(1 / 60);
+  loop.play();
+  check("play drops overlay", loop.paintOverlay === false && loop.dirty.length === 0);
+  loop.stop();
+}
+
+{
+  const engine = blinker();
+  const loop = new LifeLoop({ engine, speed: 10 });
+  loop.align();
+  loop.beginStroke();
+  loop.stamp(-1, 0, 1);
+  const wrapped = loop.tick(1 / 60);
+  check(
+    "wrapped stamp stays in-bounds",
+    wrapped.dirty.length === 1 && wrapped.dirty[0].x === 4 && wrapped.dirty[0].y === 0,
+  );
+  loop.stepOnce();
+  check("step drops overlay", loop.paintOverlay === false && loop.dirty.length === 0);
+  loop.stop();
 }
 
 {
@@ -150,6 +211,7 @@ function midMorph(speed = 10) {
   check("paint mid-morph does not rewind blend", Math.abs(loop.blend - held) < 1e-9);
   check("paint mid-morph lands in both buffers", engine.get(0, 0) === 1 && loop.previous[engine.index(0, 0)] === 1);
   check("paint mid-morph does not copy the whole current into previous", loop.previous[engine.index(1, 2)] === 1);
+  check("paint mid-morph does not overlay dirty tiles", loop.paintOverlay === false);
   flush(loop, 1);
   check("paint mid-morph settles without a snap", loop.blend === 1 && engine.get(0, 0) === 1);
 }
