@@ -567,22 +567,24 @@ export function softOccField(
  */
 export const SKEL_SIGMA = 0.42;
 
-/** Occupancy-blur kernel. Locked for rest and motion so settled glue
- *  does not breathe when a generation or a paint morph is in flight.
- *  Births and deaths still appear through the occupancy mix.
+/** Occupancy-blur floor — liquidFluxNorm(0.75) = 1/9. Stay glue uses this
+ *  so settled necks do not breathe. Changing occupancy uses skelFlux.
  */
 export const SKEL_REST_FLUX = 1 / 9;
 
-export function skelFlux(_t?: number, identical = false): number {
-  void identical;
+export function skelRestFlux(): number {
   return SKEL_REST_FLUX;
 }
 
+export function skelFlux(t = 1, identical = false): number {
+  if (identical) return SKEL_REST_FLUX;
+  return Math.max(liquidFluxNorm(t), SKEL_REST_FLUX);
+}
+
 /**
- * Generation water: locked rest at the ends, surface tension in between.
- * inside = stay-cell rest OR (blur(mix(i0,i1)) >= 0.5)
- * Hold is cells live in both frames, not the pixel overlap of two
- * expanded cores — a one-cell slide shares an edge, not a tile.
+ * Generation water: stay cores + rest-blurred stay glue, or motion-blurred
+ * leftover occupancy. Hold is cells live in both frames, not the pixel
+ * overlap of two expanded cores — a one-cell slide shares an edge, not a tile.
  */
 export function waterField(
   x: number,
@@ -598,20 +600,34 @@ export function waterField(
   const hold = liveCore(x, y, stay, pull, goo01);
   if (hold < 0) return hold;
   const identical = cellsEqual(prev, next);
-  const sigma = SKEL_SIGMA * skelFlux(t, identical);
-  let acc = 0;
-  let w = 0;
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const wt = Math.exp(-0.5 * (dx * dx + dy * dy));
-      const a = liveField(x + dx * sigma, y + dy * sigma, prev, pull, goo01) < 0 ? 1 : 0;
-      const b = liveField(x + dx * sigma, y + dy * sigma, next, pull, goo01) < 0 ? 1 : 0;
-      acc += (a * (1 - e) + b * e) * wt;
-      w += wt;
+  const restSigma = SKEL_SIGMA * SKEL_REST_FLUX;
+  const motionSigma = SKEL_SIGMA * skelFlux(t, identical);
+  const occ = (
+    px: number,
+    py: number,
+    cells: ReadonlyArray<readonly [number, number]>,
+  ) => (liveField(px, py, cells, pull, goo01) < 0 ? 1 : 0);
+  const blur = (
+    sigma: number,
+    sample: (px: number, py: number) => number,
+  ) => {
+    let acc = 0;
+    let w = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const wt = Math.exp(-0.5 * (dx * dx + dy * dy));
+        acc += sample(x + dx * sigma, y + dy * sigma) * wt;
+        w += wt;
+      }
     }
-  }
-  const blurred = acc / w;
-  return blurred >= 0.5 ? -0.25 : 0.25;
+    return acc / w;
+  };
+  const stayBlur = blur(restSigma, (px, py) => occ(px, py, stay));
+  const motionBlur = blur(motionSigma, (px, py) => {
+    const mix = occ(px, py, prev) * (1 - e) + occ(px, py, next) * e;
+    return Math.max(mix - occ(px, py, stay), 0);
+  });
+  return stayBlur >= 0.5 || motionBlur >= 0.5 ? -0.25 : 0.25;
 }
 
 function stayCells(

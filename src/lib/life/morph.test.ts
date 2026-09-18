@@ -13,6 +13,7 @@ import {
   stretchSd,
   visualCenter,
   skelFlux,
+  skelRestFlux,
   SKEL_REST_FLUX,
   waterField,
   type MorphCell,
@@ -370,11 +371,12 @@ check("rest flux floor is a quarter dump leftover", Math.abs(SKEL_REST_FLUX - 1 
 check("landed glue keeps the t=0.75 blur kernel", Math.abs(skelFlux(1) - 1 / 9) < 1e-12);
 check("takeoff glue keeps the same rest kernel", Math.abs(skelFlux(0) - 1 / 9) < 1e-12);
 check("a still board stays on the rest kernel at mid-step", skelFlux(0.25, true) === SKEL_REST_FLUX);
+check("the stay-glue kernel never tracks morph time", skelRestFlux() === SKEL_REST_FLUX);
 check(
-  "a changing board keeps rest glue thickness at dump",
-  Math.abs(skelFlux(0.25, false) - SKEL_REST_FLUX) < 1e-12,
+  "a changing board opens the motion kernel at dump",
+  Math.abs(skelFlux(0.25, false) - 1) < 1e-12,
+  `flux=${skelFlux(0.25, false)}`,
 );
-check("glue thickness does not track morph time", skelFlux(0.25, false) === skelFlux(1));
 
 const water0 = waterField(0.5, 0.5, BAR, BAR, 0, lockedPull, lockedGoo);
 const water1 = waterField(0.5, 0.5, BAR, [[1, 0]], 1, lockedPull, lockedGoo);
@@ -427,6 +429,28 @@ check(
   "a one-cell slide does not hold that surviving edge as a rest core",
   slideEdge === -0.25 || slideEdge === 0.25,
   `edge=${slideEdge.toFixed(4)}`,
+);
+const diag: Array<[number, number]> = [
+  [0, 0],
+  [1, 1],
+];
+const diagBorn: Array<[number, number]> = [
+  [0, 0],
+  [1, 1],
+  [4, 0],
+];
+const diagRest = waterField(0.5, 0.5, diag, diag, 1, lockedPull, lockedGoo);
+const diagPulse = waterField(0.5, 0.5, diag, diagBorn, 0.25, lockedPull, lockedGoo);
+check(
+  "a distant birth does not fatten settled diagonal glue",
+  (diagPulse < 0) === (diagRest < 0) && Math.abs(diagPulse - diagRest) < 1e-9,
+  `rest=${diagRest.toFixed(4)} pulse=${diagPulse.toFixed(4)}`,
+);
+const birthGap = waterField(1, 0.5, [[0, 0]], [[0, 0], [1, 0]], 0.25, lockedPull, lockedGoo);
+check(
+  "an ortho birth is wet at the dump",
+  birthGap < 0,
+  `gap=${birthGap.toFixed(4)}`,
 );
 
 if (failed) {

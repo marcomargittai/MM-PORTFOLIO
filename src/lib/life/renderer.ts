@@ -6,19 +6,13 @@ import {
   WIGGLE_STAY,
 } from "./death";
 import { pullKCells } from "./magnetism";
-import { SKEL_SIGMA, skelFlux } from "./morph";
+import { SKEL_REST_FLUX, SKEL_SIGMA, skelFlux } from "./morph";
 import { GOO_MAX, GOO_UNIT, PULL_MAX, PULL_UNIT } from "./prefs";
 
 const PTR_VEL_ADD = 2;
 const PTR_VEL_DECAY = 0.9;
 const PTR_STALE_S = 0.1;
 const PTR_MIN_DT_S = 0.014;
-const PTR_SPLAT_UV = 0.25;
-const PTR_SPLAT_FLOOR = 0.035;
-const PTR_SIZE_GAIN = 0.55;
-const PTR_CORNER_HOVER = 0.42;
-const PTR_AMOUNT_SLOW = 0.22;
-const PTR_AMOUNT_FAST = 0.85;
 const PTR_LEAVE_S = 0.12;
 
 /** Outward offset in pixels — hides tile hairlines without inflating corners. */
@@ -232,7 +226,7 @@ void main() {
     restFullCore(px, ch, fullD, coreD);
     float a = 1.0 - smoothstep(-aa, aa, fullD);
     float hold = 1.0 - smoothstep(-aa, aa, coreD);
-    fragColor = vec4(a, a, hold, 1.0);
+    fragColor = vec4(a, a, a, hold);
     return;
   }
   float f0;
@@ -248,8 +242,9 @@ void main() {
   restFullCore(px, 2.0, fs, cs);
   float a0 = 1.0 - smoothstep(-aa, aa, f0);
   float a1 = 1.0 - smoothstep(-aa, aa, f1);
+  float stayFull = 1.0 - smoothstep(-aa, aa, fs);
   float hold = 1.0 - smoothstep(-aa, aa, cs);
-  fragColor = vec4(a0, a1, hold, 1.0);
+  fragColor = vec4(a0, a1, stayFull, hold);
 }
 `;
 
@@ -260,6 +255,7 @@ uniform sampler2D uField;
 uniform vec2 uResolution;
 uniform float uBlend;
 uniform float uSigma;
+uniform float uRestSigma;
 uniform vec2 uAxis;
 uniform float uMix;
 uniform float uWiggle;
@@ -271,28 +267,48 @@ float liquidEase(float t) {
   return t * t * (10.0 + t * (-20.0 + t * (15.0 - 4.0 * t)));
 }
 
+void samplePair(vec4 s, float e, float fromField, out float motion, out float stay, out float hold) {
+  if (fromField > 0.5) {
+    stay = s.b;
+    float mixed = mix(s.r, s.g, e) + uWiggle * (max(s.g - s.r, 0.0) + ${WIGGLE_STAY.toFixed(2)} * min(s.r, s.g) + ${WIGGLE_DIED.toFixed(2)} * max(s.r - s.g, 0.0));
+    motion = max(mixed - stay, 0.0);
+    hold = s.a;
+  } else {
+    motion = s.r;
+    stay = s.g;
+    hold = s.b;
+  }
+}
+
 void main() {
   vec2 uv = gl_FragCoord.xy / uResolution;
   vec4 c = texture(uField, uv);
-  float t = uBlend;
-  float e = liquidEase(t);
-  float inter = uMix > 0.5 ? c.b : c.g;
-  float src = uMix > 0.5
-    ? mix(c.r, c.g, e) + uWiggle * (max(c.g - c.r, 0.0) + ${WIGGLE_STAY.toFixed(2)} * min(c.r, c.g) + ${WIGGLE_DIED.toFixed(2)} * max(c.r - c.g, 0.0))
-    : c.r;
-  float sig = max(uSigma, 0.45);
-  float acc = 0.0;
-  float wsum = 0.0;
+  float e = liquidEase(uBlend);
+  float motion0;
+  float stay0;
+  float hold;
+  samplePair(c, e, uMix, motion0, stay0, hold);
+  float sigM = max(uSigma, 0.45);
+  float sigS = max(uRestSigma, 0.45);
+  float accM = 0.0;
+  float accS = 0.0;
+  float wM = 0.0;
+  float wS = 0.0;
   for (int i = -24; i <= 24; i++) {
-    float w = exp(-0.5 * float(i * i) / (sig * sig));
     vec4 s = texture(uField, uv + uAxis * float(i) / uResolution);
-    float v = uMix > 0.5
-      ? mix(s.r, s.g, e) + uWiggle * (max(s.g - s.r, 0.0) + ${WIGGLE_STAY.toFixed(2)} * min(s.r, s.g) + ${WIGGLE_DIED.toFixed(2)} * max(s.r - s.g, 0.0))
-      : s.r;
-    acc += v * w;
-    wsum += w;
+    float motion;
+    float stay;
+    float ignored;
+    samplePair(s, e, uMix, motion, stay, ignored);
+    float d2 = float(i * i);
+    float wm = exp(-0.5 * d2 / (sigM * sigM));
+    float ws = exp(-0.5 * d2 / (sigS * sigS));
+    accM += motion * wm;
+    accS += stay * ws;
+    wM += wm;
+    wS += ws;
   }
-  fragColor = vec4(acc / max(wsum, 1e-6), inter, 0.0, 1.0);
+  fragColor = vec4(accM / max(wM, 1e-6), accS / max(wS, 1e-6), hold, 1.0);
 }
 `;
 
@@ -306,10 +322,7 @@ uniform vec2 uCellSize;
 uniform vec2 uGridSize;
 uniform float uWrap;
 uniform float uSigma;
-uniform vec2 uPtr;
-uniform vec2 uPtrPrev;
-uniform float uPtrVel;
-uniform float uPtrAlive;
+uniform float uRestSigma;
 
 out vec4 fragColor;
 
@@ -325,36 +338,19 @@ vec2 cellCenter(vec2 gc) {
   return uOrigin + (gc + 0.5) * uCellSize;
 }
 
-float sdRoundBox(vec2 p, vec2 b, float r) {
-  r = min(max(r, 0.0), min(b.x, b.y));
-  vec2 q = abs(p) - b + r;
-  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
-}
-
-float lineDist(vec2 p, vec2 a, vec2 b) {
-  vec2 pa = p - a;
-  vec2 ba = b - a;
-  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0.0, 1.0);
-  return length(pa - ba * h);
-}
-
-float hoverAt(vec2 cellPx) {
-  float minSide = min(uResolution.x, uResolution.y);
-  float rad = max((${PTR_SPLAT_FLOOR.toFixed(3)} + ${PTR_SPLAT_UV.toFixed(2)} * uPtrVel) * minSide, 1.0);
-  float d = lineDist(cellPx, uPtrPrev, uPtr);
-  float t = clamp(1.0 - d / rad, 0.0, 1.0);
-  float amount = mix(${PTR_AMOUNT_SLOW.toFixed(2)}, ${PTR_AMOUNT_FAST.toFixed(2)}, clamp(uPtrVel, 0.0, 1.0));
-  return t * t * t * amount * uPtrAlive;
-}
-
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y);
   vec2 uv = gl_FragCoord.xy / uResolution;
-  vec2 c = texture(uField, uv).rg;
-  float blurred = c.r;
-  float inter = c.g;
-  float ae = max(0.035, 0.35 / max(uSigma, 1.0));
-  float body = max(inter, smoothstep(0.5 - ae, 0.5 + ae, blurred));
+  vec4 c = texture(uField, uv);
+  float blurMotion = c.r;
+  float blurStay = c.g;
+  float inter = c.b;
+  float aeM = max(0.035, 0.35 / max(uSigma, 1.0));
+  float aeS = max(0.035, 0.35 / max(uRestSigma, 1.0));
+  float body = max(inter, max(
+    smoothstep(0.5 - aeM, 0.5 + aeM, blurMotion),
+    smoothstep(0.5 - aeS, 0.5 + aeS, blurStay)
+  ));
 
   vec2 gridPos = (px - uOrigin) / uCellSize;
   if (uWrap < 0.5 && (
@@ -373,13 +369,8 @@ void main() {
       vec2 gc = base + vec2(float(i), float(j));
       if (uWrap < 0.5 && !inGrid(gc, uGridSize)) continue;
       if (uWrap >= 0.5) gc = wrapCell(gc, uGridSize);
-      vec2 center = cellCenter(gc);
-      float infl = hoverAt(center);
-      float dotHalf = dotR * (1.0 + ${PTR_SIZE_GAIN.toFixed(2)} * infl);
-      float rad = dotHalf * mix(1.0, ${PTR_CORNER_HOVER.toFixed(2)}, infl);
-      float sd = sdRoundBox(px - center, vec2(dotHalf), rad);
-      float aa = max(0.75, fwidth(sd));
-      lattice = max(lattice, 1.0 - smoothstep(0.0, aa, sd));
+      float d = length(px - cellCenter(gc));
+      lattice = max(lattice, 1.0 - smoothstep(dotR * 0.35, dotR, d));
     }
   }
 
@@ -429,6 +420,7 @@ type BlurUniforms = {
   uResolution: WebGLUniformLocation;
   uBlend: WebGLUniformLocation;
   uSigma: WebGLUniformLocation;
+  uRestSigma: WebGLUniformLocation;
   uAxis: WebGLUniformLocation;
   uMix: WebGLUniformLocation;
   uWiggle: WebGLUniformLocation;
@@ -442,10 +434,7 @@ type ComposeUniforms = {
   uGridSize: WebGLUniformLocation;
   uWrap: WebGLUniformLocation;
   uSigma: WebGLUniformLocation;
-  uPtr: WebGLUniformLocation;
-  uPtrPrev: WebGLUniformLocation;
-  uPtrVel: WebGLUniformLocation;
-  uPtrAlive: WebGLUniformLocation;
+  uRestSigma: WebGLUniformLocation;
 };
 
 export class LifeBlobRenderer {
@@ -755,6 +744,7 @@ export class LifeBlobRenderer {
       uResolution: loc(blurProg, "uResolution"),
       uBlend: loc(blurProg, "uBlend"),
       uSigma: loc(blurProg, "uSigma"),
+      uRestSigma: loc(blurProg, "uRestSigma"),
       uAxis: loc(blurProg, "uAxis"),
       uMix: loc(blurProg, "uMix"),
       uWiggle: loc(blurProg, "uWiggle"),
@@ -767,10 +757,7 @@ export class LifeBlobRenderer {
       uGridSize: loc(composeProg, "uGridSize"),
       uWrap: loc(composeProg, "uWrap"),
       uSigma: loc(composeProg, "uSigma"),
-      uPtr: loc(composeProg, "uPtr"),
-      uPtrPrev: loc(composeProg, "uPtrPrev"),
-      uPtrVel: loc(composeProg, "uPtrVel"),
-      uPtrAlive: loc(composeProg, "uPtrAlive"),
+      uRestSigma: loc(composeProg, "uRestSigma"),
     };
   }
 
@@ -885,6 +872,7 @@ export class LifeBlobRenderer {
 
     const t = this.blend;
     const minCell = Math.min(L.cellDevW, L.cellDevH);
+    const restSigma = Math.max(0.45, SKEL_SIGMA * minCell * SKEL_REST_FLUX);
     const sigma = Math.max(0.45, SKEL_SIGMA * minCell * skelFlux(t, this.identical));
     const wiggle = this.wiggleEnabled ? growthWiggle(t, this.growth, this.morphDuration) : 0;
     const fieldSig = [
@@ -904,6 +892,7 @@ export class LifeBlobRenderer {
       L.cornerDev,
       this.wrap ? 1 : 0,
       sigma,
+      restSigma,
       wiggle,
     ].join();
 
@@ -928,6 +917,7 @@ export class LifeBlobRenderer {
       gl.uniform2f(blur.uResolution, w, h);
       gl.uniform1f(blur.uBlend, this.blend);
       gl.uniform1f(blur.uSigma, sigma);
+      gl.uniform1f(blur.uRestSigma, restSigma);
       gl.uniform1f(blur.uWiggle, wiggle);
       gl.uniform2f(blur.uAxis, 1, 0);
       gl.uniform1f(blur.uMix, 1);
@@ -942,7 +932,6 @@ export class LifeBlobRenderer {
     }
 
     const c = this.composeUni!;
-    const dpr = L.cssW > 0 ? this.canvas!.width / L.cssW : 1;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -955,10 +944,7 @@ export class LifeBlobRenderer {
     gl.uniform2f(c.uGridSize, cols, rows);
     gl.uniform1f(c.uWrap, this.wrap ? 1 : 0);
     gl.uniform1f(c.uSigma, Math.max(sigma, 1));
-    gl.uniform2f(c.uPtr, this.ptrCssX * dpr, this.ptrCssY * dpr);
-    gl.uniform2f(c.uPtrPrev, this.ptrSampleCssX * dpr, this.ptrSampleCssY * dpr);
-    gl.uniform1f(c.uPtrVel, this.ptrVel);
-    gl.uniform1f(c.uPtrAlive, this.ptrAlive);
+    gl.uniform1f(c.uRestSigma, Math.max(restSigma, 1));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     this.commitPointerSample();
   }
@@ -1112,23 +1098,27 @@ export class LifeBlobRenderer {
       stayData = paintStay();
     }
 
-    const mix = new Float32Array(w * h);
+    const stayOcc = new Float32Array(w * h);
+    const motionOcc = new Float32Array(w * h);
     const inter = new Uint8Array(w * h);
-    for (let i = 0, p = 0; i < mix.length; i++, p += 4) {
+    for (let i = 0, p = 0; i < stayOcc.length; i++, p += 4) {
       const a = prevData[p] / 255;
       const b = nextData[p] / 255;
-      mix[i] = a * (1 - e) + b * e + wiggleOccupancy(a, b, wiggle);
+      const stay = stayData[p] / 255;
+      const mixed = a * (1 - e) + b * e + wiggleOccupancy(a, b, wiggle);
+      stayOcc[i] = stay;
+      motionOcc[i] = Math.max(mixed - stay, 0);
       inter[i] = stayData[p] > 127 ? 1 : 0;
     }
 
-    const sigma = Math.max(
-      0.45,
-      SKEL_SIGMA * Math.min(L.cellDevW, L.cellDevH) * skelFlux(t, this.identical),
-    );
-    const blurred = boxBlur(mix, w, h, sigma);
+    const minCell = Math.min(L.cellDevW, L.cellDevH);
+    const restSigma = Math.max(0.45, SKEL_SIGMA * minCell * SKEL_REST_FLUX);
+    const sigma = Math.max(0.45, SKEL_SIGMA * minCell * skelFlux(t, this.identical));
+    const blurStay = boxBlur(stayOcc, w, h, restSigma);
+    const blurMotion = boxBlur(motionOcc, w, h, sigma);
     const out = ctx.createImageData(w, h);
-    for (let i = 0, p = 0; i < blurred.length; i++, p += 4) {
-      const on = inter[i] || blurred[i] >= 0.5 ? 255 : 0;
+    for (let i = 0, p = 0; i < blurStay.length; i++, p += 4) {
+      const on = inter[i] || blurStay[i] >= 0.5 || blurMotion[i] >= 0.5 ? 255 : 0;
       out.data[p] = on;
       out.data[p + 1] = on;
       out.data[p + 2] = on;
@@ -1138,14 +1128,8 @@ export class LifeBlobRenderer {
 
     const replicas = this.wrap ? [-1, 0, 1] : [0];
     const dotR = Math.min(2.25, Math.max(1.15, Math.min(L.cellDevW, L.cellDevH) * 0.03));
-    const dpr = L.cssW > 0 ? canvas.width / L.cssW : 1;
-    const ptrX = this.ptrCssX * dpr;
-    const ptrY = this.ptrCssY * dpr;
-    const prevX = this.ptrSampleCssX * dpr;
-    const prevY = this.ptrSampleCssY * dpr;
-    const splatR = Math.max((PTR_SPLAT_FLOOR + PTR_SPLAT_UV * this.ptrVel) * Math.min(w, h), 1);
-    const amount = PTR_AMOUNT_SLOW + (PTR_AMOUNT_FAST - PTR_AMOUNT_SLOW) * this.ptrVel;
     ctx.fillStyle = "#fff";
+    ctx.beginPath();
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         for (const oy of replicas) {
@@ -1154,22 +1138,13 @@ export class LifeBlobRenderer {
             if (ox !== 0 && c > 3 && c < cols - 4) continue;
             const cx = L.originDevX + (c + ox * cols + 0.5) * L.cellDevW;
             const cy = L.originDevY + (r + oy * rows + 0.5) * L.cellDevH;
-            const dist = lineDist2(cx, cy, prevX, prevY, ptrX, ptrY);
-            const falloff = Math.max(0, Math.min(1, 1 - dist / splatR));
-            const infl = falloff * falloff * falloff * amount * this.ptrAlive;
-            const half = dotR * (1 + PTR_SIZE_GAIN * infl);
-            const corner = half * (1 - infl + PTR_CORNER_HOVER * infl);
-            ctx.beginPath();
-            if (typeof ctx.roundRect === "function") {
-              ctx.roundRect(cx - half, cy - half, half * 2, half * 2, corner);
-            } else {
-              ctx.arc(cx, cy, half, 0, Math.PI * 2);
-            }
-            ctx.fill();
+            ctx.moveTo(cx + dotR, cy);
+            ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
           }
         }
       }
     }
+    ctx.fill();
     this.commitPointerSample();
   }
 
@@ -1297,16 +1272,6 @@ export class LifeBlobRenderer {
 function markGl(status: string) {
   if (typeof window === "undefined") return;
   (window as Window & { __mmLifeGL?: string }).__mmLifeGL = status;
-}
-
-function lineDist2(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const pax = px - ax;
-  const pay = py - ay;
-  const bax = bx - ax;
-  const bay = by - ay;
-  const denom = bax * bax + bay * bay;
-  const h = denom <= 1e-8 ? 0 : Math.min(1, Math.max(0, (pax * bax + pay * bay) / denom));
-  return Math.hypot(pax - bax * h, pay - bay * h);
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
