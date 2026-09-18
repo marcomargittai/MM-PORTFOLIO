@@ -604,10 +604,14 @@ export class LifeBlobRenderer {
     const cssH = Math.max(1, canvas.clientHeight || parent?.clientHeight || window.innerHeight);
     const w = Math.max(1, Math.round(cssW * dpr));
     const h = Math.max(1, Math.round(cssH * dpr));
+    const prevCssW = this.layout?.cssW;
+    const prevCssH = this.layout?.cssH;
+    let bust = false;
 
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
+      bust = true;
     }
 
     if (this.gl) {
@@ -616,13 +620,14 @@ export class LifeBlobRenderer {
       if (this.off2d.width !== w || this.off2d.height !== h) {
         this.off2d.width = w;
         this.off2d.height = h;
+        bust = true;
       }
     }
 
     if (this.layout) {
       this.layout = this.computeLayout(this.layout.cols, this.layout.rows);
     }
-    this.lastFieldSig = "";
+    if (bust || prevCssW !== cssW || prevCssH !== cssH) this.lastFieldSig = "";
   }
 
   render(
@@ -994,17 +999,57 @@ export class LifeBlobRenderer {
     ].join();
   }
 
+  private strokePad(): number {
+    const L = this.layout!;
+    return 0.1 * this.pull * Math.max(L.cellDevW, L.cellDevH) + REST_SEAM_PX + L.cornerDev + L.softDev + 2;
+  }
+
+  private eachStrokeScissor(
+    cell: PaintCell,
+    w: number,
+    h: number,
+    pad: number,
+    visit: (sx: number, sy: number, sw: number, sh: number) => void,
+  ): void {
+    const L = this.layout!;
+    const replicas = this.wrap ? [-1, 0, 1] : [0];
+    for (const oy of replicas) {
+      for (const ox of replicas) {
+        const left = L.originDevX + (cell.x + ox * L.cols) * L.cellDevW;
+        const top = L.originDevY + (cell.y + oy * L.rows) * L.cellDevH;
+        let sx = Math.floor(left - pad);
+        let sy = Math.floor(h - (top + L.cellDevH + pad));
+        let sw = Math.ceil(L.cellDevW + 2 * pad);
+        let sh = Math.ceil(L.cellDevH + 2 * pad);
+        if (sx < 0) {
+          sw += sx;
+          sx = 0;
+        }
+        if (sy < 0) {
+          sh += sy;
+          sy = 0;
+        }
+        if (sx + sw > w) sw = w - sx;
+        if (sy + sh > h) sh = h - sy;
+        if (sw < 1 || sh < 1) continue;
+        visit(sx, sy, sw, sh);
+      }
+    }
+  }
+
   /** Instant rest-stroke tiles. No blur, no goo — play/step still use the dual kernel. */
   private renderGlStroke(dirty: PaintCell[]): void {
     const gl = this.gl!;
     const L = this.layout!;
     const w = gl.drawingBufferWidth;
     const h = gl.drawingBufferHeight;
-    if (this.texCols < 1 || this.texRows < 1) return;
+    if (this.texCols < 1 || this.texRows < 1 || !this.fboA || !this.texA || !this.composeProg || !this.composeUni) {
+      return;
+    }
 
     const cols = L.cols;
     const rows = L.rows;
-    const pad = REST_SEAM_PX + Math.ceil(L.softDev) + 1;
+    const pad = this.strokePad();
     const texel = new Uint8Array(2);
 
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
@@ -1020,7 +1065,6 @@ export class LifeBlobRenderer {
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.SCISSOR_TEST);
     gl.bindVertexArray(this.vao);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, w, h);
     gl.useProgram(this.fieldProg);
     gl.activeTexture(gl.TEXTURE0);
@@ -1029,22 +1073,33 @@ export class LifeBlobRenderer {
     gl.uniform1f(this.fieldUni!.uGooey, 0);
     gl.uniform1f(this.fieldUni!.uIdentical, 1);
     gl.uniform1f(this.fieldUni!.uBlend, 1);
-
-    const replicas = this.wrap ? [-1, 0, 1] : [0];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboA);
     for (const cell of dirty) {
-      for (const oy of replicas) {
-        for (const ox of replicas) {
-          const left = L.originDevX + (cell.x + ox * cols) * L.cellDevW;
-          const top = L.originDevY + (cell.y + oy * rows) * L.cellDevH;
-          const sx = Math.floor(left - pad);
-          const sy = Math.floor(h - top - L.cellDevH - pad);
-          const sw = Math.ceil(L.cellDevW + pad * 2);
-          const sh = Math.ceil(L.cellDevH + pad * 2);
-          if (sw < 1 || sh < 1 || sx + sw <= 0 || sy + sh <= 0 || sx >= w || sy >= h) continue;
-          gl.scissor(sx, sy, sw, sh);
-          gl.drawArrays(gl.TRIANGLES, 0, 3);
-        }
-      }
+      this.eachStrokeScissor(cell, w, h, pad, (sx, sy, sw, sh) => {
+        gl.scissor(sx, sy, sw, sh);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      });
+    }
+
+    const minCell = Math.min(L.cellDevW, L.cellDevH);
+    const restSigma = Math.max(1, SKEL_SIGMA * minCell * SKEL_REST_FLUX);
+    const c = this.composeUni;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.useProgram(this.composeProg);
+    gl.bindTexture(gl.TEXTURE_2D, this.texA);
+    gl.uniform1i(c.uField, 0);
+    gl.uniform2f(c.uResolution, w, h);
+    gl.uniform2f(c.uOrigin, L.originDevX, L.originDevY);
+    gl.uniform2f(c.uCellSize, L.cellDevW, L.cellDevH);
+    gl.uniform2f(c.uGridSize, cols, rows);
+    gl.uniform1f(c.uWrap, this.wrap ? 1 : 0);
+    gl.uniform1f(c.uSigma, restSigma);
+    gl.uniform1f(c.uRestSigma, restSigma);
+    for (const cell of dirty) {
+      this.eachStrokeScissor(cell, w, h, pad, (sx, sy, sw, sh) => {
+        gl.scissor(sx, sy, sw, sh);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      });
     }
 
     gl.disable(gl.SCISSOR_TEST);
@@ -1058,21 +1113,22 @@ export class LifeBlobRenderer {
     rows: number,
   ): void {
     const ctx = this.ctx2d!;
+    const canvas = this.canvas!;
     const L = this.layout!;
-    const bit = (c: number, r: number) => {
-      let x = c;
-      let y = r;
+    const wrapCoord = (c: number, r: number): [number, number] | null => {
       if (this.wrap) {
-        x = ((c % cols) + cols) % cols;
-        y = ((r % rows) + rows) % rows;
-      } else if (c < 0 || r < 0 || c >= cols || r >= rows) {
-        return 0;
+        return [((c % cols) + cols) % cols, ((r % rows) + rows) % rows];
       }
-      return current[y * cols + x] ? 1 : 0;
+      if (c < 0 || r < 0 || c >= cols || r >= rows) return null;
+      return [c, r];
+    };
+    const bit = (c: number, r: number) => {
+      const at = wrapCoord(c, r);
+      return at ? (current[at[1] * cols + at[0]] ? 1 : 0) : 0;
     };
 
     const seam = 0.6;
-    const pad = REST_SEAM_PX + 1;
+    const pad = this.strokePad();
     const replicas = this.wrap ? [-1, 0, 1] : [0];
     const dotR = Math.min(2.25, Math.max(1.15, Math.min(L.cellDevW, L.cellDevH) * 0.03));
     const hw = L.halfDevW + seam;
@@ -1104,36 +1160,42 @@ export class LifeBlobRenderer {
 
     const eachReplica = (c: number, r: number, draw: (cx: number, cy: number) => void) => {
       for (const oy of replicas) {
-        if (oy !== 0 && r > 3 && r < rows - 4) continue;
         for (const ox of replicas) {
-          if (ox !== 0 && c > 3 && c < cols - 4) continue;
           const cx = L.originDevX + (c + ox * cols + 0.5) * L.cellDevW;
           const cy = L.originDevY + (r + oy * rows + 0.5) * L.cellDevH;
+          if (cx + hw + pad < 0 || cy + hh + pad < 0 || cx - hw - pad > canvas.width || cy - hh - pad > canvas.height) {
+            continue;
+          }
           draw(cx, cy);
         }
       }
     };
 
+    const patch = new Map<number, { x: number; y: number }>();
+    const add = (c: number, r: number) => {
+      const at = wrapCoord(c, r);
+      if (!at) return;
+      patch.set(at[1] * cols + at[0], { x: at[0], y: at[1] });
+    };
     for (const cell of dirty) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) add(cell.x + dx, cell.y + dy);
+      }
+    }
+
+    for (const cell of patch.values()) {
       eachReplica(cell.x, cell.y, (cx, cy) => {
         ctx.fillStyle = "#000";
         ctx.fillRect(cx - hw - pad, cy - hh - pad, (hw + pad) * 2, (hh + pad) * 2);
       });
-
-      const neighbors: Array<[number, number]> = [
-        [cell.x, cell.y],
-        [cell.x + 1, cell.y],
-        [cell.x - 1, cell.y],
-        [cell.x, cell.y + 1],
-        [cell.x, cell.y - 1],
-      ];
-      ctx.fillStyle = "#fff";
-      for (const [c, r] of neighbors) {
-        if (!bit(c, r)) continue;
-        const radii = radiiFor(c, r);
-        eachReplica(c, r, (cx, cy) => fillBlob(cx, cy, radii));
-      }
-
+    }
+    ctx.fillStyle = "#fff";
+    for (const cell of patch.values()) {
+      if (!bit(cell.x, cell.y)) continue;
+      const radii = radiiFor(cell.x, cell.y);
+      eachReplica(cell.x, cell.y, (cx, cy) => fillBlob(cx, cy, radii));
+    }
+    for (const cell of patch.values()) {
       eachReplica(cell.x, cell.y, (cx, cy) => {
         ctx.beginPath();
         ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
