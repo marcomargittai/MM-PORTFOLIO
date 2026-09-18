@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
   output: "export",
   images: { unoptimized: true },
   basePath: pagesBasePath(),
+  assetPrefix: process.env.ASSET_PREFIX || undefined,
   allowedDevOrigins: ["127.0.0.1", "localhost", "0.0.0.0"],
 };
 
