@@ -10,6 +10,7 @@ import {
   dyingTravel,
   growthWiggle,
   liquidEase,
+  wiggleOccupancy,
   survivorPull,
 } from "./death";
 
@@ -120,10 +121,20 @@ check("liquid ease matches the generation mix", liquidEase(0.25) === easeInOut(0
 check("liquid ease dumps at a quarter", Math.abs(liquidEase(0.25) - 47 / 128) < 1e-12);
 check("liquid ease is mostly done by half", Math.abs(liquidEase(0.5) - 13 / 16) < 1e-12);
 check("liquid ease film is almost rest at 3/4", Math.abs(liquidEase(0.75) - 63 / 64) < 1e-12);
-check("a still life does not wiggle", growthWiggle(0.4, 0) === 0);
+check("a still board does not wiggle", growthWiggle(0.4, 0) === 0);
 check("wiggle is still at both rests", growthWiggle(0, 3) === 0 && growthWiggle(1, 3) === 0);
-check("wiggle waits for the mass dump", growthWiggle(0.2, 2, 1 / 12) === 0);
-check("growth rings after the dump", Math.abs(growthWiggle(0.35, 2, 1 / 12)) > 1e-4);
+check("wiggle is live before the dump", Math.abs(growthWiggle(0.2, 2, 1 / 12)) > 0.05);
+check("wiggle is live after the dump", Math.abs(growthWiggle(0.35, 2, 1 / 12)) > 0.05);
+check("wiggle spans the morph at play speed", Math.abs(growthWiggle(0.7, 2, 1 / 12)) > 0.08);
+check("wiggle is a real occupancy bump at 12/s", Math.abs(growthWiggle(0.5, 2, 1 / 12)) > 0.08);
+check("slow morph still rings at mid-step", Math.abs(growthWiggle(0.5, 2, 1)) > 0.2);
+check("fast morph still offsets the silhouette", Math.abs(growthWiggle(0.65, 2, 1 / 60)) > 0.15);
+check("off occupancy term is zero", wiggleOccupancy(1, 1, 0) === 0 && wiggleOccupancy(0, 1, 0) === 0);
+check(
+  "births take more occupancy than stay",
+  wiggleOccupancy(0, 1, 0.3) > wiggleOccupancy(1, 1, 0.3) &&
+    wiggleOccupancy(1, 1, 0.3) > wiggleOccupancy(1, 0, 0.3),
+);
 check("dissolve fade starts solid", dyingDissolveFade(0) === 1);
 check("dissolve fade ends gone", dyingDissolveFade(1) === 0);
 check("mid dissolve keeps most of its size", Math.abs(dyingDissolveScale(0.5) - 0.91) < 1e-9);

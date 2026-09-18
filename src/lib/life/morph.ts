@@ -562,22 +562,29 @@ export function softOccField(
 
 /**
  * Mid-step blur of mixed occupancy, in cell units. 0 at both rests.
- * Intersection of the two rest shapes is never lost, so a block does
- * not breathe and a parent tile does not shrink before a birth.
+ * Cells live in both frames are never lost, so a block does not
+ * breathe and a parent tile does not shrink before a birth.
  */
 export const SKEL_SIGMA = 0.42;
 
-/** Occupancy-blur floor — liquidFluxNorm(0.75) = 1/9. Landed glue uses this. */
+/** Occupancy-blur floor — liquidFluxNorm(0.75) = 1/9. Stay glue uses this
+ *  so settled necks do not breathe. Changing occupancy uses skelFlux.
+ */
 export const SKEL_REST_FLUX = 1 / 9;
 
-export function skelFlux(t: number, identical = false): number {
+export function skelRestFlux(): number {
+  return SKEL_REST_FLUX;
+}
+
+export function skelFlux(t = 1, identical = false): number {
   if (identical) return SKEL_REST_FLUX;
   return Math.max(liquidFluxNorm(t), SKEL_REST_FLUX);
 }
 
 /**
- * Generation water: locked rest at the ends, surface tension in between.
- * inside = intersection OR (blur(mix(i0,i1)) >= 0.5)
+ * Generation water: stay cores + rest-blurred stay glue, or motion-blurred
+ * leftover occupancy. Hold is cells live in both frames, not the pixel
+ * overlap of two expanded cores — a one-cell slide shares an edge, not a tile.
  */
 export function waterField(
   x: number,
@@ -589,24 +596,56 @@ export function waterField(
   goo01: number,
 ): number {
   const e = easeSmooth(t);
-  const c0 = liveCore(x, y, prev, pull, goo01);
-  const c1 = liveCore(x, y, next, pull, goo01);
-  if (c0 < 0 && c1 < 0) return Math.min(c0, c1);
+  const stay = stayCells(prev, next);
+  const hold = liveCore(x, y, stay, pull, goo01);
+  if (hold < 0) return hold;
   const identical = cellsEqual(prev, next);
-  const sigma = SKEL_SIGMA * skelFlux(t, identical);
-  let acc = 0;
-  let w = 0;
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const wt = Math.exp(-0.5 * (dx * dx + dy * dy));
-      const a = liveField(x + dx * sigma, y + dy * sigma, prev, pull, goo01) < 0 ? 1 : 0;
-      const b = liveField(x + dx * sigma, y + dy * sigma, next, pull, goo01) < 0 ? 1 : 0;
-      acc += (a * (1 - e) + b * e) * wt;
-      w += wt;
+  const restSigma = SKEL_SIGMA * SKEL_REST_FLUX;
+  const motionSigma = SKEL_SIGMA * skelFlux(t, identical);
+  const occ = (
+    px: number,
+    py: number,
+    cells: ReadonlyArray<readonly [number, number]>,
+  ) => (liveField(px, py, cells, pull, goo01) < 0 ? 1 : 0);
+  const blur = (
+    sigma: number,
+    sample: (px: number, py: number) => number,
+  ) => {
+    let acc = 0;
+    let w = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const wt = Math.exp(-0.5 * (dx * dx + dy * dy));
+        acc += sample(x + dx * sigma, y + dy * sigma) * wt;
+        w += wt;
+      }
+    }
+    return acc / w;
+  };
+  const stayBlur = blur(restSigma, (px, py) => occ(px, py, stay));
+  const mixBlur = blur(motionSigma, (px, py) => (
+    occ(px, py, prev) * (1 - e) + occ(px, py, next) * e
+  ));
+  const changeBlur = blur(motionSigma, (px, py) => (
+    Math.abs(occ(px, py, prev) - occ(px, py, next))
+  ));
+  return stayBlur >= 0.5 || (mixBlur >= 0.5 && changeBlur > 0.05) ? -0.25 : 0.25;
+}
+
+function stayCells(
+  prev: ReadonlyArray<readonly [number, number]>,
+  next: ReadonlyArray<readonly [number, number]>,
+): Array<[number, number]> {
+  const stay: Array<[number, number]> = [];
+  for (const [x, y] of prev) {
+    for (const [nx, ny] of next) {
+      if (nx === x && ny === y) {
+        stay.push([x, y]);
+        break;
+      }
     }
   }
-  const blurred = acc / w;
-  return blurred >= 0.5 || (c0 < 0 && c1 < 0) ? -0.25 : 0.25;
+  return stay;
 }
 
 function cellsEqual(

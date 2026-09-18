@@ -1,4 +1,6 @@
-import type { LifeEngine } from "./engine";
+import { wrapIndex, type LifeEngine } from "./engine";
+
+export type PaintCell = { x: number; y: number; value: 0 | 1 };
 
 export interface FrameInfo {
   dt: number;
@@ -9,6 +11,9 @@ export interface FrameInfo {
   morphDuration: number;
   previous: Uint8Array;
   current: Uint8Array;
+  dirty: PaintCell[];
+  paintOverlay: boolean;
+  rebuildField: boolean;
 }
 
 export interface LifeLoopOptions {
@@ -17,6 +22,8 @@ export interface LifeLoopOptions {
   maxStepsPerFrame?: number;
   maxDelta?: number;
   onFrame?: (info: FrameInfo) => void;
+  /** Keep RAF alive for pointer wake / hover decay. */
+  isBusy?: () => boolean;
 }
 
 const MIN_SPEED = 0.25;
@@ -37,6 +44,7 @@ export class LifeLoop {
   blend = 1;
   previous: Uint8Array;
   onFrame: ((info: FrameInfo) => void) | undefined;
+  isBusy: (() => boolean) | undefined;
 
   private rafId: number | null = null;
   private lastTime = 0;
@@ -46,6 +54,9 @@ export class LifeLoop {
   private restStroke = false;
   private queuedStep = false;
   private idleFrames = 0;
+  dirty: PaintCell[] = [];
+  paintOverlay = false;
+  rebuildField = false;
 
   constructor(options: LifeLoopOptions) {
     this.engine = options.engine;
@@ -53,6 +64,7 @@ export class LifeLoop {
     this.maxStepsPerFrame = options.maxStepsPerFrame ?? 2;
     this.maxDelta = options.maxDelta ?? 0.25;
     this.onFrame = options.onFrame;
+    this.isBusy = options.isBusy;
     this.previous = new Uint8Array(options.engine.cells);
   }
 
@@ -81,6 +93,7 @@ export class LifeLoop {
     this.playing = true;
     this.morphing = false;
     this.restStroke = false;
+    this.dropPaintOverlay();
     this.start();
   }
 
@@ -113,6 +126,7 @@ export class LifeLoop {
     this.restStroke = false;
     this.queuedStep = false;
     this.settleRate = 1 / MANUAL_MORPH;
+    this.dropPaintOverlay();
     this.start();
   }
 
@@ -123,17 +137,27 @@ export class LifeLoop {
     this.morphing = false;
     this.restStroke = false;
     this.queuedStep = false;
+    this.dropPaintOverlay();
   }
 
   beginStroke(): void {
     this.playing = false;
     this.queuedStep = false;
     this.ensurePrev();
-    this.restStroke = this.blend >= 1 - 1e-4 && !this.morphing;
-    if (!this.restStroke) {
+    this.restStroke = false;
+    this.dirty.length = 0;
+    this.paintOverlay = false;
+    if (this.blend < 1 - 1e-4 || this.morphing) {
       this.morphing = true;
       this.easeRemaining(SETTLE_DURATION);
     }
+    this.start();
+  }
+
+  endStroke(): void {
+    this.paintOverlay = false;
+    this.dirty.length = 0;
+    this.rebuildField = true;
     this.start();
   }
 
@@ -141,23 +165,26 @@ export class LifeLoop {
     this.ensurePrev();
     this.playing = false;
     const i = this.engine.index(x, y);
-
-    if (this.restStroke || (this.blend >= 1 - 1e-4 && !this.morphing)) {
-      if (!this.morphing || this.blend >= 1 - 1e-4) {
-        this.previous.set(this.engine.cells);
-        this.blend = 0;
-        this.easeRemaining(PAINT_MORPH);
-        this.restStroke = true;
-      }
-      this.engine.cells[i] = value;
-      this.morphing = true;
-      this.start();
-      return;
-    }
-
     this.engine.cells[i] = value;
-    this.morphing = true;
-    if (this.settleRate <= 0) this.easeRemaining(SETTLE_DURATION);
+    this.previous[i] = value;
+    const cell = {
+      x: wrapIndex(x, this.engine.width),
+      y: wrapIndex(y, this.engine.height),
+      value,
+    };
+
+    const atRest = this.blend >= 1 - 1e-4 && !this.morphing;
+    if (atRest) {
+      this.blend = 1;
+      this.morphing = false;
+      this.restStroke = false;
+      this.dirty.push(cell);
+      this.paintOverlay = true;
+    } else {
+      this.morphing = true;
+      this.paintOverlay = false;
+      if (this.settleRate <= 0) this.easeRemaining(SETTLE_DURATION);
+    }
     this.start();
   }
 
@@ -269,6 +296,11 @@ export class LifeLoop {
     return steps;
   }
 
+  private dropPaintOverlay(): void {
+    this.paintOverlay = false;
+    this.dirty.length = 0;
+  }
+
   private emit(dt: number, steps: number): FrameInfo {
     const blend = this.blend < 0 ? 0 : this.blend > 1 ? 1 : this.blend;
     const info: FrameInfo = {
@@ -280,8 +312,13 @@ export class LifeLoop {
       morphDuration: this.morphDuration,
       previous: this.previous,
       current: this.engine.cells,
+      dirty: this.dirty.slice(),
+      paintOverlay: this.paintOverlay,
+      rebuildField: this.rebuildField,
     };
     this.onFrame?.(info);
+    if (this.paintOverlay) this.dirty.length = 0;
+    this.rebuildField = false;
     return info;
   }
 
@@ -292,7 +329,7 @@ export class LifeLoop {
     const dt = raw > this.maxDelta ? this.maxDelta : raw < 0 ? 0 : raw;
     const steps = this.applyTime(dt);
     this.emit(dt, steps);
-    const busy = this.playing || this.morphing || this.queuedStep;
+    const busy = this.playing || this.morphing || this.queuedStep || this.isBusy?.() === true;
     if (!busy) {
       this.idleFrames += 1;
       if (this.idleFrames > 10) {

@@ -1,5 +1,5 @@
 import { DEFAULT_GOO, DEFAULT_PULL, GOO_MAX, PULL_UNIT } from "./prefs";
-import { liveField, sdRoundBox } from "./magnetism";
+import { liveCore, liveField, sdRoundBox } from "./magnetism";
 import {
   FAR_DIST,
   FLUSH_DIST,
@@ -13,6 +13,7 @@ import {
   stretchSd,
   visualCenter,
   skelFlux,
+  skelRestFlux,
   SKEL_REST_FLUX,
   waterField,
   type MorphCell,
@@ -370,9 +371,11 @@ check("rest flux floor is a quarter dump leftover", Math.abs(SKEL_REST_FLUX - 1 
 check("landed glue keeps the t=0.75 blur kernel", Math.abs(skelFlux(1) - 1 / 9) < 1e-12);
 check("takeoff glue keeps the same rest kernel", Math.abs(skelFlux(0) - 1 / 9) < 1e-12);
 check("a still board stays on the rest kernel at mid-step", skelFlux(0.25, true) === SKEL_REST_FLUX);
+check("the stay-glue kernel never tracks morph time", skelRestFlux() === SKEL_REST_FLUX);
 check(
-  "a changing board still dumps at a quarter",
+  "a changing board opens the motion kernel at dump",
   Math.abs(skelFlux(0.25, false) - 1) < 1e-12,
+  `flux=${skelFlux(0.25, false)}`,
 );
 
 const water0 = waterField(0.5, 0.5, BAR, BAR, 0, lockedPull, lockedGoo);
@@ -411,6 +414,43 @@ check(
   "an ortho birth keeps the parent tile wet",
   parentIn < 0,
   `parent=${parentIn.toFixed(3)}`,
+);
+const slidePrev: Array<[number, number]> = [[0, 0]];
+const slideNext: Array<[number, number]> = [[1, 0]];
+const slideEdge = waterField(1, 0.5, slidePrev, slideNext, 0.5, lockedPull, lockedGoo);
+const slideSliver =
+  liveCore(1, 0.5, slidePrev, lockedPull, lockedGoo) < 0 &&
+  liveCore(1, 0.5, slideNext, lockedPull, lockedGoo) < 0;
+check(
+  "a one-cell slide overlaps both expanded cores at the surviving edge",
+  slideSliver,
+);
+check(
+  "a one-cell slide does not hold that surviving edge as a rest core",
+  slideEdge === -0.25 || slideEdge === 0.25,
+  `edge=${slideEdge.toFixed(4)}`,
+);
+const diag: Array<[number, number]> = [
+  [0, 0],
+  [1, 1],
+];
+const diagBorn: Array<[number, number]> = [
+  [0, 0],
+  [1, 1],
+  [4, 0],
+];
+const diagRest = waterField(0.5, 0.5, diag, diag, 1, lockedPull, lockedGoo);
+const diagPulse = waterField(0.5, 0.5, diag, diagBorn, 0.25, lockedPull, lockedGoo);
+check(
+  "a distant birth does not fatten settled diagonal glue",
+  (diagPulse < 0) === (diagRest < 0) && Math.abs(diagPulse - diagRest) < 1e-9,
+  `rest=${diagRest.toFixed(4)} pulse=${diagPulse.toFixed(4)}`,
+);
+const birthGap = waterField(1, 0.5, [[0, 0]], [[0, 0], [1, 0]], 0.25, lockedPull, lockedGoo);
+check(
+  "an ortho birth is wet at the dump",
+  birthGap < 0,
+  `gap=${birthGap.toFixed(4)}`,
 );
 
 if (failed) {

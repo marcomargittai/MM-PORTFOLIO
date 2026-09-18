@@ -56,11 +56,15 @@ export function survivorPull(
   return sourcePull(settledAt, x, y);
 }
 
-/** Impulse after the capillary dump. Ring is wall-clock, not blend. */
-export const WIGGLE_T_STAR = 0.25;
-export const WIGGLE_AMP = 0.11;
-export const WIGGLE_FREQ = 16;
-export const WIGGLE_DECAY = 50;
+/** Morph-time ring. 0 at both rests (C1). Not wall-clock. */
+export const WIGGLE_AMP = 0.3;
+/** Always one swell per generation; extra cycles only when the morph is slow. */
+export const WIGGLE_CYCLES_BASE = 1;
+export const WIGGLE_HZ = 1.5;
+/** Occupancy weights — shader / 2d must match. */
+export const WIGGLE_BORN = 1;
+export const WIGGLE_STAY = 0.45;
+export const WIGGLE_DIED = 0.25;
 
 /**
  * Beta(2,4) CDF — viscocapillary mix. Short neck, dump at t=1/4,
@@ -87,15 +91,27 @@ export function easeInOut(t: number): number {
 }
 
 /**
- * Added-mass ring. Only when net population grows. Zero until the
- * dump, then a 16 Hz viscously damped pulse that is dead at rest.
+ * Liquid ring on a changing board. `activity` is any differing-cell
+ * count (not net growth). Zero at t=0 / t=1 and when activity==0.
+ * `duration` only adds slow extra cycles.
  */
-export function growthWiggle(t: number, growth: number, duration = 1 / 12): number {
-  if (growth <= 0) return 0;
+export function growthWiggle(t: number, activity: number, duration = 1 / 12): number {
+  if (activity <= 0) return 0;
   const u = t < 0 ? 0 : t > 1 ? 1 : t;
-  if (u <= WIGGLE_T_STAR || u >= 1 - 1e-6) return 0;
-  const tau = (u - WIGGLE_T_STAR) * Math.max(duration, 1e-3);
-  return WIGGLE_AMP * Math.exp(-WIGGLE_DECAY * tau) * Math.sin(2 * Math.PI * WIGGLE_FREQ * tau);
+  if (u <= 0 || u >= 1 - 1e-6) return 0;
+  const s = 1 - u;
+  const win = 16 * u * u * s * s;
+  const cycles = WIGGLE_CYCLES_BASE + WIGGLE_HZ * Math.max(duration, 1e-3);
+  return WIGGLE_AMP * win * Math.sin(2 * Math.PI * cycles * u);
+}
+
+/** Extra occupancy before the blur. 0 when wiggle is 0 (off path). */
+export function wiggleOccupancy(prev: number, next: number, wiggle: number): number {
+  if (wiggle === 0) return 0;
+  const born = Math.max(next - prev, 0);
+  const died = Math.max(prev - next, 0);
+  const stay = Math.min(prev, next);
+  return wiggle * (WIGGLE_BORN * born + WIGGLE_STAY * stay + WIGGLE_DIED * died);
 }
 
 /** Smoothstep so the drop eases into the neighbor instead of skating linearly. */
