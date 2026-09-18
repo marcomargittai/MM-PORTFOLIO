@@ -1,0 +1,57 @@
+name: Compare
+
+on:
+  push:
+    branches: [cursor/life-glue-hover-add7]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-src
+      - name: This branch
+        uses: actions/checkout@v4
+        with:
+          path: pr-src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pr-src/package-lock.json
+      - name: Build both
+        run: |
+          set -euo pipefail
+          npm ci --prefix main-src
+          npm ci --prefix pr-src
+          npm run build --prefix main-src
+          BASE_PATH=/MM-PORTFOLIO/pr npm run build --prefix pr-src
+          mkdir -p site/pr
+          cp -a main-src/out/. site/
+          cp -a pr-src/out/. site/pr/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
