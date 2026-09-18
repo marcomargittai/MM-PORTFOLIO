@@ -1,5 +1,5 @@
 import { DEFAULT_GOO, DEFAULT_PULL, GOO_MAX, PULL_UNIT } from "./prefs";
-import { liveField, sdRoundBox } from "./magnetism";
+import { liveCore, liveField, sdRoundBox } from "./magnetism";
 import {
   FAR_DIST,
   FLUSH_DIST,
@@ -412,6 +412,21 @@ check(
   "an ortho birth keeps the parent tile wet",
   parentIn < 0,
   `parent=${parentIn.toFixed(3)}`,
+);
+const slidePrev: Array<[number, number]> = [[0, 0]];
+const slideNext: Array<[number, number]> = [[1, 0]];
+const slideEdge = waterField(1, 0.5, slidePrev, slideNext, 0.5, lockedPull, lockedGoo);
+const slideSliver =
+  liveCore(1, 0.5, slidePrev, lockedPull, lockedGoo) < 0 &&
+  liveCore(1, 0.5, slideNext, lockedPull, lockedGoo) < 0;
+check(
+  "a one-cell slide overlaps both expanded cores at the surviving edge",
+  slideSliver,
+);
+check(
+  "a one-cell slide does not hold that surviving edge as a rest core",
+  slideEdge === -0.25 || slideEdge === 0.25,
+  `edge=${slideEdge.toFixed(4)}`,
 );
 
 if (failed) {

@@ -71,6 +71,7 @@ vec2 sampleOcc(vec2 gc) {
 
 float sampleLive(vec2 gc, float ch) {
   vec2 o = sampleOcc(gc);
+  if (ch >= 1.5) return min(o.x, o.y);
   return ch < 0.5 ? o.x : o.y;
 }
 
@@ -240,9 +241,14 @@ void main() {
   float c1;
   restFullCore(px, 0.0, f0, c0);
   restFullCore(px, 1.0, f1, c1);
+  // Stay-cell core only. Pixel overlap of the two seamed cores is a
+  // hairline on a one-cell slide — the surviving edge is in both tiles.
+  float fs;
+  float cs;
+  restFullCore(px, 2.0, fs, cs);
   float a0 = 1.0 - smoothstep(-aa, aa, f0);
   float a1 = 1.0 - smoothstep(-aa, aa, f1);
-  float hold = (1.0 - smoothstep(-aa, aa, c0)) * (1.0 - smoothstep(-aa, aa, c1));
+  float hold = 1.0 - smoothstep(-aa, aa, cs);
   fragColor = vec4(a0, a1, hold, 1.0);
 }
 `;
@@ -1082,15 +1088,28 @@ export class LifeBlobRenderer {
       this.paintRest(offCtx, (c, r) => bitOf(grid, c, r), cols, rows);
       return offCtx.getImageData(0, 0, w, h).data;
     };
+    const paintStay = () => {
+      offCtx.fillStyle = "#000";
+      offCtx.fillRect(0, 0, w, h);
+      this.paintRest(
+        offCtx,
+        (c, r) => (bitOf(previous, c, r) && bitOf(current, c, r) ? 1 : 0),
+        cols,
+        rows,
+      );
+      return offCtx.getImageData(0, 0, w, h).data;
+    };
     let prevData: Uint8ClampedArray;
     let nextData: Uint8ClampedArray;
+    let stayData: Uint8ClampedArray;
     if (t < 0.001) {
-      prevData = nextData = paintOne(previous);
+      prevData = nextData = stayData = paintOne(previous);
     } else if (t > 0.999) {
-      prevData = nextData = paintOne(current);
+      prevData = nextData = stayData = paintOne(current);
     } else {
       prevData = paintOne(previous);
       nextData = paintOne(current);
+      stayData = paintStay();
     }
 
     const mix = new Float32Array(w * h);
@@ -1099,7 +1118,7 @@ export class LifeBlobRenderer {
       const a = prevData[p] / 255;
       const b = nextData[p] / 255;
       mix[i] = a * (1 - e) + b * e + wiggleOccupancy(a, b, wiggle);
-      inter[i] = a > 0.5 && b > 0.5 ? 1 : 0;
+      inter[i] = stayData[p] > 127 ? 1 : 0;
     }
 
     const sigma = Math.max(

@@ -562,8 +562,8 @@ export function softOccField(
 
 /**
  * Mid-step blur of mixed occupancy, in cell units. 0 at both rests.
- * Intersection of the two rest shapes is never lost, so a block does
- * not breathe and a parent tile does not shrink before a birth.
+ * Cells live in both frames are never lost, so a block does not
+ * breathe and a parent tile does not shrink before a birth.
  */
 export const SKEL_SIGMA = 0.42;
 
@@ -580,7 +580,9 @@ export function skelFlux(_t?: number, identical = false): number {
 
 /**
  * Generation water: locked rest at the ends, surface tension in between.
- * inside = intersection OR (blur(mix(i0,i1)) >= 0.5)
+ * inside = stay-cell rest OR (blur(mix(i0,i1)) >= 0.5)
+ * Hold is cells live in both frames, not the pixel overlap of two
+ * expanded cores — a one-cell slide shares an edge, not a tile.
  */
 export function waterField(
   x: number,
@@ -592,9 +594,9 @@ export function waterField(
   goo01: number,
 ): number {
   const e = easeSmooth(t);
-  const c0 = liveCore(x, y, prev, pull, goo01);
-  const c1 = liveCore(x, y, next, pull, goo01);
-  if (c0 < 0 && c1 < 0) return Math.min(c0, c1);
+  const stay = stayCells(prev, next);
+  const hold = liveCore(x, y, stay, pull, goo01);
+  if (hold < 0) return hold;
   const identical = cellsEqual(prev, next);
   const sigma = SKEL_SIGMA * skelFlux(t, identical);
   let acc = 0;
@@ -609,7 +611,23 @@ export function waterField(
     }
   }
   const blurred = acc / w;
-  return blurred >= 0.5 || (c0 < 0 && c1 < 0) ? -0.25 : 0.25;
+  return blurred >= 0.5 ? -0.25 : 0.25;
+}
+
+function stayCells(
+  prev: ReadonlyArray<readonly [number, number]>,
+  next: ReadonlyArray<readonly [number, number]>,
+): Array<[number, number]> {
+  const stay: Array<[number, number]> = [];
+  for (const [x, y] of prev) {
+    for (const [nx, ny] of next) {
+      if (nx === x && ny === y) {
+        stay.push([x, y]);
+        break;
+      }
+    }
+  }
+  return stay;
 }
 
 function cellsEqual(
