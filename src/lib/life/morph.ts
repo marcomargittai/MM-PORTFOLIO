@@ -623,11 +623,13 @@ export function waterField(
     return acc / w;
   };
   const stayBlur = blur(restSigma, (px, py) => occ(px, py, stay));
-  const motionBlur = blur(motionSigma, (px, py) => {
-    const mix = occ(px, py, prev) * (1 - e) + occ(px, py, next) * e;
-    return Math.max(mix - occ(px, py, stay), 0);
-  });
-  return stayBlur >= 0.5 || motionBlur >= 0.5 ? -0.25 : 0.25;
+  const mixBlur = blur(motionSigma, (px, py) => (
+    occ(px, py, prev) * (1 - e) + occ(px, py, next) * e
+  ));
+  const changeBlur = blur(motionSigma, (px, py) => (
+    Math.abs(occ(px, py, prev) - occ(px, py, next))
+  ));
+  return stayBlur >= 0.5 || (mixBlur >= 0.5 && changeBlur > 0.05) ? -0.25 : 0.25;
 }
 
 function stayCells(

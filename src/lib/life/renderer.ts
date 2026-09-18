@@ -265,16 +265,15 @@ float liquidEase(float t) {
   return t * t * (10.0 + t * (-20.0 + t * (15.0 - 4.0 * t)));
 }
 
-void samplePair(vec4 s, float e, float fromField, out float motion, out float stay, out float hold) {
+void sampleTriple(vec4 s, float e, float fromField, out float mixed, out float stay, out float change) {
   if (fromField > 0.5) {
     stay = s.b;
-    float mixed = mix(s.r, s.g, e) + uWiggle * (max(s.g - s.r, 0.0) + ${WIGGLE_STAY.toFixed(2)} * min(s.r, s.g) + ${WIGGLE_DIED.toFixed(2)} * max(s.r - s.g, 0.0));
-    motion = max(mixed - stay, 0.0);
-    hold = s.b;
+    mixed = mix(s.r, s.g, e) + uWiggle * (max(s.g - s.r, 0.0) + ${WIGGLE_STAY.toFixed(2)} * min(s.r, s.g) + ${WIGGLE_DIED.toFixed(2)} * max(s.r - s.g, 0.0));
+    change = abs(s.r - s.g);
   } else {
-    motion = s.r;
+    mixed = s.r;
     stay = s.g;
-    hold = s.b;
+    change = s.b;
   }
 }
 
@@ -282,31 +281,33 @@ void main() {
   vec2 uv = gl_FragCoord.xy / uResolution;
   vec4 c = texture(uField, uv);
   float e = liquidEase(uBlend);
-  float motion0;
+  float mixed0;
   float stay0;
-  float hold;
-  samplePair(c, e, uMix, motion0, stay0, hold);
+  float change0;
+  sampleTriple(c, e, uMix, mixed0, stay0, change0);
   float sigM = max(uSigma, 0.45);
   float sigS = max(uRestSigma, 0.45);
   float accM = 0.0;
   float accS = 0.0;
+  float accC = 0.0;
   float wM = 0.0;
   float wS = 0.0;
   for (int i = -24; i <= 24; i++) {
     vec4 s = texture(uField, uv + uAxis * float(i) / uResolution);
-    float motion;
+    float mixed;
     float stay;
-    float ignored;
-    samplePair(s, e, uMix, motion, stay, ignored);
+    float change;
+    sampleTriple(s, e, uMix, mixed, stay, change);
     float d2 = float(i * i);
     float wm = exp(-0.5 * d2 / (sigM * sigM));
     float ws = exp(-0.5 * d2 / (sigS * sigS));
-    accM += motion * wm;
+    accM += mixed * wm;
+    accC += change * wm;
     accS += stay * ws;
     wM += wm;
     wS += ws;
   }
-  fragColor = vec4(accM / max(wM, 1e-6), accS / max(wS, 1e-6), hold, 1.0);
+  fragColor = vec4(accM / max(wM, 1e-6), accS / max(wS, 1e-6), accC / max(wM, 1e-6), 1.0);
 }
 `;
 
@@ -340,15 +341,15 @@ void main() {
   vec2 px = vec2(gl_FragCoord.x, uResolution.y - gl_FragCoord.y);
   vec2 uv = gl_FragCoord.xy / uResolution;
   vec4 c = texture(uField, uv);
-  float blurMotion = c.r;
+  float blurMix = c.r;
   float blurStay = c.g;
-  float inter = c.b;
+  float blurChange = c.b;
   float aeM = max(0.035, 0.35 / max(uSigma, 1.0));
   float aeS = max(0.035, 0.35 / max(uRestSigma, 1.0));
-  float body = max(inter, max(
-    smoothstep(0.5 - aeM, 0.5 + aeM, blurMotion),
-    smoothstep(0.5 - aeS, 0.5 + aeS, blurStay)
-  ));
+  float stayOn = smoothstep(0.5 - aeS, 0.5 + aeS, blurStay);
+  float mixOn = smoothstep(0.5 - aeM, 0.5 + aeM, blurMix);
+  float nearChange = smoothstep(0.02, 0.12, blurChange);
+  float body = max(stayOn, mixOn * nearChange);
 
   vec2 gridPos = (px - uOrigin) / uCellSize;
   if (uWrap < 0.5 && (
@@ -1097,15 +1098,16 @@ export class LifeBlobRenderer {
     }
 
     const stayOcc = new Float32Array(w * h);
-    const motionOcc = new Float32Array(w * h);
+    const mixOcc = new Float32Array(w * h);
+    const changeOcc = new Float32Array(w * h);
     const inter = new Uint8Array(w * h);
     for (let i = 0, p = 0; i < stayOcc.length; i++, p += 4) {
       const a = prevData[p] / 255;
       const b = nextData[p] / 255;
       const stay = stayData[p] / 255;
-      const mixed = a * (1 - e) + b * e + wiggleOccupancy(a, b, wiggle);
       stayOcc[i] = stay;
-      motionOcc[i] = Math.max(mixed - stay, 0);
+      mixOcc[i] = a * (1 - e) + b * e + wiggleOccupancy(a, b, wiggle);
+      changeOcc[i] = Math.abs(a - b);
       inter[i] = stayData[p] > 127 ? 1 : 0;
     }
 
@@ -1113,10 +1115,11 @@ export class LifeBlobRenderer {
     const restSigma = Math.max(0.45, SKEL_SIGMA * minCell * SKEL_REST_FLUX);
     const sigma = Math.max(0.45, SKEL_SIGMA * minCell * skelFlux(t, this.identical));
     const blurStay = boxBlur(stayOcc, w, h, restSigma);
-    const blurMotion = boxBlur(motionOcc, w, h, sigma);
+    const blurMix = boxBlur(mixOcc, w, h, sigma);
+    const blurChange = boxBlur(changeOcc, w, h, sigma);
     const out = ctx.createImageData(w, h);
     for (let i = 0, p = 0; i < blurStay.length; i++, p += 4) {
-      const on = inter[i] || blurStay[i] >= 0.5 || blurMotion[i] >= 0.5 ? 255 : 0;
+      const on = inter[i] || blurStay[i] >= 0.5 || (blurMix[i] >= 0.5 && blurChange[i] > 0.05) ? 255 : 0;
       out.data[p] = on;
       out.data[p + 1] = on;
       out.data[p + 2] = on;
