@@ -225,8 +225,7 @@ void main() {
     float ch = (uIdentical > 0.5 || uBlend > 0.5) ? 1.0 : 0.0;
     restFullCore(px, ch, fullD, coreD);
     float a = 1.0 - smoothstep(-aa, aa, fullD);
-    float hold = 1.0 - smoothstep(-aa, aa, coreD);
-    fragColor = vec4(a, a, a, hold);
+    fragColor = vec4(a, a, a, 1.0);
     return;
   }
   float f0;
@@ -235,16 +234,15 @@ void main() {
   float c1;
   restFullCore(px, 0.0, f0, c0);
   restFullCore(px, 1.0, f1, c1);
-  // Stay-cell core only. Pixel overlap of the two seamed cores is a
-  // hairline on a one-cell slide — the surviving edge is in both tiles.
+  // Stay occupancy, not the pixel overlap of the two seamed cores.
+  // Alpha stays 1 so a0/a1 cannot premultiply to zero outside stay tiles.
   float fs;
   float cs;
   restFullCore(px, 2.0, fs, cs);
   float a0 = 1.0 - smoothstep(-aa, aa, f0);
   float a1 = 1.0 - smoothstep(-aa, aa, f1);
   float stayFull = 1.0 - smoothstep(-aa, aa, fs);
-  float hold = 1.0 - smoothstep(-aa, aa, cs);
-  fragColor = vec4(a0, a1, stayFull, hold);
+  fragColor = vec4(a0, a1, stayFull, 1.0);
 }
 `;
 
@@ -272,7 +270,7 @@ void samplePair(vec4 s, float e, float fromField, out float motion, out float st
     stay = s.b;
     float mixed = mix(s.r, s.g, e) + uWiggle * (max(s.g - s.r, 0.0) + ${WIGGLE_STAY.toFixed(2)} * min(s.r, s.g) + ${WIGGLE_DIED.toFixed(2)} * max(s.r - s.g, 0.0));
     motion = max(mixed - stay, 0.0);
-    hold = s.a;
+    hold = s.b;
   } else {
     motion = s.r;
     stay = s.g;
